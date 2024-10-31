@@ -4,7 +4,7 @@ services:
           context: ./frontend
           dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend:latest
-        container_name: frontend
+        container_name: spack-stack-frontend
         hostname: slurmfrontend
         user: admin
         volumes:
@@ -17,7 +17,7 @@ services:
           context: ./master
           dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master:latest
-        container_name: master
+        container_name: spack-stack-master
         hostname: slurmmaster
         user: admin
         volumes:
@@ -34,7 +34,7 @@ services:
           context: ./node
           dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
-        container_name: node1
+        container_name: spack-stack-node1
         hostname: slurmnode1
         user: admin
         volumes:
@@ -50,7 +50,7 @@ services:
           context: ./node
           dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
-        container_name: node2
+        container_name: spack-stack-node2
         hostname: slurmnode2
         user: admin
         volumes:
@@ -66,7 +66,7 @@ services:
           context: ./node
           dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
-        container_name: node3
+        container_name: spack-stack-node3
         hostname: slurmnode3
         user: admin
         volumes:
@@ -82,7 +82,7 @@ services:
           context: ./node
           dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
-        container_name: node4
+        container_name: spack-stack-node4
         hostname: slurmnode4
         user: admin
         volumes:
@@ -98,7 +98,7 @@ services:
           context: ./node
           dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
-        container_name: node5
+        container_name: spack-stack-node5
         hostname: slurmnode5
         user: admin
         volumes:
