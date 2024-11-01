@@ -150,17 +150,12 @@ RUN --mount=type=secret,id=access_key_id --mount=type=secret,id=secret_access_ke
   # Cleanup unneccessary packages
   spack gc -y
 
-  # Strip binaries to save some space
-  find -L  /opt/spack-stack/envs/unified-env/install/gcc/11.4.0/* -type f -exec readlink -f '{}' \; | \
-    xargs file -i | \
-    grep 'charset=binary' | \
-    grep 'x-executable\|x-archive\|x-sharedlib' | \
-    awk -F: '{print $1}' | xargs strip -s
+  # Do not strip binaries, it breaks JEDI/UFS builds
 
   # Cleanup unneeded .spack directories
   find /opt/spack-stack/envs/unified-env/install/gcc/11.4.0 -name .spack -type d -print0 | xargs -0 rm -rf "{}"
   rm -rf ~/.spack 
 
   # Cleanup /tmp
-  rm -f /tmp/*
+  rm -rf /tmp/*
 EOF
