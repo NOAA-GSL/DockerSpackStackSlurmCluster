@@ -16,7 +16,7 @@ jobs:
 
   docker_compose_test:
     name: Docker Compose Test
-    runs-on: ubuntu2204-4c-16g-150ssd
+    runs-on: ubuntu2204-8c-32g-300ssd
 
     steps:
       -
@@ -54,7 +54,7 @@ jobs:
         run: docker compose -f docker-compose.yml down
 
   build-frontend-arm64:
-    runs-on: LinuxARM64-4core-16G-150Gb
+    runs-on: LinuxARM64-8core-32G-300Gb
     needs: docker_compose_test
     timeout-minutes: 360
     permissions:
@@ -168,7 +168,7 @@ jobs:
           retention-days: 1
 
   build-frontend-amd64:
-    runs-on: ubuntu2204-4c-16g-150ssd
+    runs-on: ubuntu2204-8c-32g-300ssd
     needs: docker_compose_test
     timeout-minutes: 360
     permissions:
@@ -305,7 +305,7 @@ jobs:
           docker buildx imagetools inspect ${{ env.REGISTRY_FRONTEND_IMAGE }}:${{ steps.meta.outputs.version }}
 
   build-master-arm64:
-    runs-on: LinuxARM64-4core-16G-150Gb
+    runs-on: LinuxARM64-8core-32G-300Gb
     needs: docker_compose_test
     timeout-minutes: 360
     permissions:
@@ -419,7 +419,7 @@ jobs:
           retention-days: 1
 
   build-master-amd64:
-    runs-on: ubuntu2204-4c-16g-150ssd
+    runs-on: ubuntu2204-8c-32g-300ssd
     needs: docker_compose_test
     timeout-minutes: 360
     permissions:
@@ -556,7 +556,7 @@ jobs:
           docker buildx imagetools inspect ${{ env.REGISTRY_MASTER_IMAGE }}:${{ steps.meta.outputs.version }}
 
   build-node-arm64:
-    runs-on: LinuxARM64-4core-16G-150Gb
+    runs-on: LinuxARM64-8core-32G-300Gb
     needs: docker_compose_test
     timeout-minutes: 360
     permissions:
@@ -670,7 +670,7 @@ jobs:
           retention-days: 1
 
   build-node-amd64:
-    runs-on: ubuntu2204-4c-16g-150ssd
+    runs-on: ubuntu2204-8c-32g-300ssd
     needs: docker_compose_test
     timeout-minutes: 360
     permissions:
