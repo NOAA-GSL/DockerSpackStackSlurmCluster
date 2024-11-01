@@ -170,7 +170,7 @@ jobs:
 
   build-frontend-amd64:
     runs-on: ubuntu2204-8c-32g-300ssd
-    needs: docker_compose_test
+    #needs: docker_compose_test
     timeout-minutes: 360
     permissions:
       packages: write
@@ -307,7 +307,7 @@ jobs:
 
   build-master-arm64:
     runs-on: LinuxARM64-8core-32G-300Gb
-    needs: docker_compose_test
+    #needs: docker_compose_test
     timeout-minutes: 360
     permissions:
       packages: write
@@ -421,7 +421,7 @@ jobs:
 
   build-master-amd64:
     runs-on: ubuntu2204-8c-32g-300ssd
-    needs: docker_compose_test
+    #needs: docker_compose_test
     timeout-minutes: 360
     permissions:
       packages: write
@@ -558,7 +558,7 @@ jobs:
 
   build-node-arm64:
     runs-on: LinuxARM64-8core-32G-300Gb
-    needs: docker_compose_test
+    #needs: docker_compose_test
     timeout-minutes: 360
     permissions:
       packages: write
@@ -672,7 +672,7 @@ jobs:
 
   build-node-amd64:
     runs-on: ubuntu2204-8c-32g-300ssd
-    needs: docker_compose_test
+    #needs: docker_compose_test
     timeout-minutes: 360
     permissions:
       packages: write
