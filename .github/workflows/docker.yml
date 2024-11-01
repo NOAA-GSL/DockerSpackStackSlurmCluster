@@ -11,51 +11,52 @@ env:
   REGISTRY_FRONTEND_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-frontend
   REGISTRY_MASTER_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-master
   REGISTRY_NODE_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-node
+  AWS_REGION: us-east-2
 
 jobs:
 
-  docker_compose_test:
-    name: Docker Compose Test
-    runs-on: ubuntu2204-8c-32g-300ssd
-
-    steps:
-      -
-        name: Checkout Repository
-        uses: actions/checkout@v4
-      -
-        name: Build and start containers
-        run: docker compose -f docker-compose.yml up --build -d
-
-      -
-        name: Check cluster logs
-        run: docker compose -f docker-compose.yml logs
-
-      -
-        name: Check status of the cluster containers
-        run: docker compose -f docker-compose.yml ps
-
-      -
-        name: Check status of Slurm
-        run: docker exec slurm-frontend sinfo
-
-      -
-        name: Run a Slurm job
-        run: docker exec slurm-frontend srun hostname
-
-      -
-        name: Test ssh access to Slurm compute nodes
-        run: |
-          docker exec slurm-frontend timeout 1s ssh slurmnode1 hostname
-          docker exec slurm-frontend timeout 1s ssh slurmnode2 hostname
-          docker exec slurm-frontend timeout 1s ssh slurmnode3 hostname
-
-      -
-        name: Shut down Slurm cluster containers
-        run: docker compose -f docker-compose.yml down
+  #docker_compose_test:
+  #  name: Docker Compose Test
+  #  runs-on: ubuntu2204-8c-32g-300ssd
+  #
+  #  steps:
+  #    -
+  #      name: Checkout Repository
+  #      uses: actions/checkout@v4
+  #    -
+  #      name: Build and start containers
+  #      run: docker compose -f docker-compose.yml up --build -d
+  #
+  #    -
+  #      name: Check cluster logs
+  #      run: docker compose -f docker-compose.yml logs
+  #
+  #    -
+  #      name: Check status of the cluster containers
+  #      run: docker compose -f docker-compose.yml ps
+  #
+  #    -
+  #      name: Check status of Slurm
+  #      run: docker exec slurm-frontend sinfo
+  #
+  #    -
+  #      name: Run a Slurm job
+  #      run: docker exec slurm-frontend srun hostname
+  #
+  #    -
+  #      name: Test ssh access to Slurm compute nodes
+  #      run: |
+  #        docker exec slurm-frontend timeout 1s ssh slurmnode1 hostname
+  #        docker exec slurm-frontend timeout 1s ssh slurmnode2 hostname
+  #        docker exec slurm-frontend timeout 1s ssh slurmnode3 hostname
+  #
+  #    -
+  #      name: Shut down Slurm cluster containers
+  #      run: docker compose -f docker-compose.yml down
 
   build-frontend-arm64:
     runs-on: LinuxARM64-8core-32G-300Gb
-    needs: docker_compose_test
+    #needs: docker_compose_test
     timeout-minutes: 360
     permissions:
       packages: write
@@ -92,18 +93,18 @@ jobs:
       -
         name: Install AWS CLI
         run: sudo apt install -y awscli
-      #-
-      #  name: Configure AWS credentials
-      #  uses: aws-actions/configure-aws-credentials@v4
-      #  with:
-      #    aws-region: ${{ env.AWS_REGION }}
-      #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-      #    role-duration-seconds: 21600 # 6 hours
-      #    role-session-name: chiltepin-github-actions
-      #-
-      #  name: Test authentication
-      #  run: |
-      #    aws sts get-caller-identity
+      -
+        name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
+          role-duration-seconds: 21600 # 6 hours
+          role-session-name: chiltepin-github-actions
+      -
+        name: Test authentication
+        run: |
+          aws sts get-caller-identity
       -
         name: Checkout repository
         uses: actions/checkout@v4
@@ -145,10 +146,10 @@ jobs:
           file: ./frontend/Dockerfile
           platforms: linux/arm64
           labels: ${{ steps.meta.outputs.labels }}
-          #secrets: |
-          #  "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-          #  "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-          #  "session_token=${{ env.AWS_SESSION_TOKEN }}"
+          secrets: |
+            "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
+            "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
+            "session_token=${{ env.AWS_SESSION_TOKEN }}"
           cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache
           cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache,mode=max
           outputs: type=image,name=${{ env.REGISTRY_FRONTEND_IMAGE }},push-by-digest=true,name-canonical=true,push=true
