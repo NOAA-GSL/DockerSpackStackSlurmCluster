@@ -100,7 +100,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
           role-duration-seconds: 21600 # 6 hours
-          role-session-name: chiltepin-github-actions
+          role-session-name: spackstackslurmcluster-github-actions
       -
         name: Test authentication
         run: |
@@ -183,18 +183,18 @@ jobs:
       -
         name: Install AWS CLI
         run: sudo apt install -y awscli
-      #-
-      #  name: Configure AWS credentials
-      #  uses: aws-actions/configure-aws-credentials@v4
-      #  with:
-      #    aws-region: ${{ env.AWS_REGION }}
-      #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-      #    role-duration-seconds: 21600 # 6 hours
-      #    role-session-name: chiltepin-github-actions
-      #-
-      #  name: Test authentication
-      #  run: |
-      #    aws sts get-caller-identity
+      -
+        name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
+          role-duration-seconds: 21600 # 6 hours
+          role-session-name: spackstackslurmcluster-github-actions
+      -
+        name: Test authentication
+        run: |
+          aws sts get-caller-identity
       -
         name: Docker meta
         id: meta
@@ -232,10 +232,10 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           platforms: linux/amd64
-          #secrets: |
-          #  "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-          #  "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-          #  "session_token=${{ env.AWS_SESSION_TOKEN }}"
+          secrets: |
+            "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
+            "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
+            "session_token=${{ env.AWS_SESSION_TOKEN }}"
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache
           cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache,mode=max
@@ -342,21 +342,6 @@ jobs:
         name: Test Docker Installation
         run: docker run hello-world
       -
-        name: Install AWS CLI
-        run: sudo apt install -y awscli
-      #-
-      #  name: Configure AWS credentials
-      #  uses: aws-actions/configure-aws-credentials@v4
-      #  with:
-      #    aws-region: ${{ env.AWS_REGION }}
-      #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-      #    role-duration-seconds: 21600 # 6 hours
-      #    role-session-name: chiltepin-github-actions
-      #-
-      #  name: Test authentication
-      #  run: |
-      #    aws sts get-caller-identity
-      -
         name: Checkout repository
         uses: actions/checkout@v4
       -
@@ -397,10 +382,6 @@ jobs:
           file: ./master/Dockerfile
           platforms: linux/arm64
           labels: ${{ steps.meta.outputs.labels }}
-          #secrets: |
-          #  "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-          #  "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-          #  "session_token=${{ env.AWS_SESSION_TOKEN }}"
           cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache
           cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache,mode=max
           outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -431,21 +412,6 @@ jobs:
       -
         name: Checkout repository
         uses: actions/checkout@v4
-      -
-        name: Install AWS CLI
-        run: sudo apt install -y awscli
-      #-
-      #  name: Configure AWS credentials
-      #  uses: aws-actions/configure-aws-credentials@v4
-      #  with:
-      #    aws-region: ${{ env.AWS_REGION }}
-      #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-      #    role-duration-seconds: 21600 # 6 hours
-      #    role-session-name: chiltepin-github-actions
-      #-
-      #  name: Test authentication
-      #  run: |
-      #    aws sts get-caller-identity
       -
         name: Docker meta
         id: meta
@@ -484,10 +450,6 @@ jobs:
           file: ./master/Dockerfile
           platforms: linux/amd64
           labels: ${{ steps.meta.outputs.labels }}
-          #secrets: |
-          #  "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-          #  "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-          #  "session_token=${{ env.AWS_SESSION_TOKEN }}"
           cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache
           cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache,mode=max
           outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -593,21 +555,6 @@ jobs:
         name: Test Docker Installation
         run: docker run hello-world
       -
-        name: Install AWS CLI
-        run: sudo apt install -y awscli
-      #-
-      #  name: Configure AWS credentials
-      #  uses: aws-actions/configure-aws-credentials@v4
-      #  with:
-      #    aws-region: ${{ env.AWS_REGION }}
-      #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-      #    role-duration-seconds: 21600 # 6 hours
-      #    role-session-name: chiltepin-github-actions
-      #-
-      #  name: Test authentication
-      #  run: |
-      #    aws sts get-caller-identity
-      -
         name: Checkout repository
         uses: actions/checkout@v4
       -
@@ -648,10 +595,6 @@ jobs:
           file: ./node/Dockerfile
           platforms: linux/arm64
           labels: ${{ steps.meta.outputs.labels }}
-          #secrets: |
-          #  "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-          #  "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-          #  "session_token=${{ env.AWS_SESSION_TOKEN }}"
           cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache
           cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache,mode=max
           outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -682,21 +625,6 @@ jobs:
       -
         name: Checkout repository
         uses: actions/checkout@v4
-      -
-        name: Install AWS CLI
-        run: sudo apt install -y awscli
-      #-
-      #  name: Configure AWS credentials
-      #  uses: aws-actions/configure-aws-credentials@v4
-      #  with:
-      #    aws-region: ${{ env.AWS_REGION }}
-      #    role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-      #    role-duration-seconds: 21600 # 6 hours
-      #    role-session-name: chiltepin-github-actions
-      #-
-      #  name: Test authentication
-      #  run: |
-      #    aws sts get-caller-identity
       -
         name: Docker meta
         id: meta
@@ -735,10 +663,6 @@ jobs:
           file: ./node/Dockerfile
           platforms: linux/amd64
           labels: ${{ steps.meta.outputs.labels }}
-          #secrets: |
-          #  "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-          #  "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-          #  "session_token=${{ env.AWS_SESSION_TOKEN }}"
           cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache
           cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache,mode=max
           outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
