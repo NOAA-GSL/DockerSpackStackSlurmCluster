@@ -730,24 +730,24 @@ jobs:
 
       -
         name: Check status of Slurm
-        run: docker exec slurm-frontend sinfo
+        run: docker exec spack-stack-frontend sinfo
 
       -
         name: Run a Slurm job
-        run: docker exec slurm-frontend srun hostname
+        run: docker exec spack-stack-frontend srun hostname
 
       -
         name: Test ssh access to Slurm compute nodes
         run: |
-          docker exec slurm-frontend timeout 1s ssh slurmnode1 hostname
-          docker exec slurm-frontend timeout 1s ssh slurmnode2 hostname
-          docker exec slurm-frontend timeout 1s ssh slurmnode3 hostname
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode1 hostname
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode2 hostname
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode3 hostname
 
       -
         name: Load spack-stack envs
         run: |
-          docker exec slurm-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-mpas-env; module list"
-          docker exec slurm-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-fv3-env; module list"
+          docker exec spack-stack-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-mpas-env; module list"
+          docker exec spack-stack-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-fv3-env; module list"
 
       -
         name: Shut down Slurm cluster containers
