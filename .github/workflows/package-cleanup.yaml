@@ -15,26 +15,26 @@ jobs:
       contents: read
     steps:
       -
-        name: Remove untagged versions of dockerspackstackslurmcluster/slurm-frontend
+        name: Remove untagged versions of dockerspackstackslurmcluster/frontend
         uses: actions/delete-package-versions@v5
         with: 
-          package-name: 'dockerspackstackslurmcluster/slurm-frontend'
+          package-name: 'dockerspackstackslurmcluster/frontend'
           package-type: 'container'
           min-versions-to-keep: 0
           delete-only-untagged-versions: 'true'
       -
-        name: Remove untagged versions of dockerspackstackslurmcluster/slurm-master
+        name: Remove untagged versions of dockerspackstackslurmcluster/master
         uses: actions/delete-package-versions@v5
         with: 
-          package-name: 'dockerspackstackslurmcluster/slurm-master'
+          package-name: 'dockerspackstackslurmcluster/master'
           package-type: 'container'
           min-versions-to-keep: 0
           delete-only-untagged-versions: 'true'
       -
-        name: Remove untagged versions of dockerspackstackslurmcluster/slurm-node
+        name: Remove untagged versions of dockerspackstackslurmcluster/node
         uses: actions/delete-package-versions@v5
         with: 
-          package-name: 'dockerspackstackslurmcluster/slurm-node'
+          package-name: 'dockerspackstackslurmcluster/node'
           package-type: 'container'
           min-versions-to-keep: 0
           delete-only-untagged-versions: 'true'

@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY_FRONTEND_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-frontend
-  REGISTRY_MASTER_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-master
-  REGISTRY_NODE_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-node
+  REGISTRY_FRONTEND_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend
+  REGISTRY_MASTER_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master
+  REGISTRY_NODE_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node
   AWS_REGION: us-east-2
 
 jobs:
