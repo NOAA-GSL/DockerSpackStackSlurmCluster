@@ -46,9 +46,6 @@ services:
         links:
                 - slurmmaster
   slurmnode2:
-        build:
-          context: ./node
-          dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
         container_name: spack-stack-node2
         hostname: slurmnode2
@@ -62,9 +59,6 @@ services:
         links:
                 - slurmmaster
   slurmnode3:
-        build:
-          context: ./node
-          dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
         container_name: spack-stack-node3
         hostname: slurmnode3
@@ -78,9 +72,6 @@ services:
         links:
                 - slurmmaster
   slurmnode4:
-        build:
-          context: ./node
-          dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
         container_name: spack-stack-node4
         hostname: slurmnode4
@@ -94,9 +85,6 @@ services:
         links:
                 - slurmmaster
   slurmnode5:
-        build:
-          context: ./node
-          dockerfile: ./Dockerfile
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
         container_name: spack-stack-node5
         hostname: slurmnode5
