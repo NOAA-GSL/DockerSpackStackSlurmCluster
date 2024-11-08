@@ -15,45 +15,6 @@ env:
 
 jobs:
 
-  #docker_compose_test:
-  #  name: Docker Compose Test
-  #  runs-on: ubuntu2204-8c-32g-300ssd
-  #
-  #  steps:
-  #    -
-  #      name: Checkout Repository
-  #      uses: actions/checkout@v4
-  #    -
-  #      name: Build and start containers
-  #      run: docker compose -f docker-compose.yml up --build -d
-  #
-  #    -
-  #      name: Check cluster logs
-  #      run: docker compose -f docker-compose.yml logs
-  #
-  #    -
-  #      name: Check status of the cluster containers
-  #      run: docker compose -f docker-compose.yml ps
-  #
-  #    -
-  #      name: Check status of Slurm
-  #      run: docker exec slurm-frontend sinfo
-  #
-  #    -
-  #      name: Run a Slurm job
-  #      run: docker exec slurm-frontend srun hostname
-  #
-  #    -
-  #      name: Test ssh access to Slurm compute nodes
-  #      run: |
-  #        docker exec slurm-frontend timeout 1s ssh slurmnode1 hostname
-  #        docker exec slurm-frontend timeout 1s ssh slurmnode2 hostname
-  #        docker exec slurm-frontend timeout 1s ssh slurmnode3 hostname
-  #
-  #    -
-  #      name: Shut down Slurm cluster containers
-  #      run: docker compose -f docker-compose.yml down
-
   build-frontend-arm64:
     runs-on: LinuxARM64-8core-32G-300Gb
     #needs: docker_compose_test
@@ -744,3 +705,50 @@ jobs:
         name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_NODE_IMAGE }}:${{ steps.meta.outputs.version }}
+
+  docker-compose-test:
+    runs-on: ubuntu2204-8c-32g-300ssd
+    needs:
+      - merge-frontend
+      - merge-master
+      - merge-node
+    steps:
+      -
+        name: Checkout Repository
+        uses: actions/checkout@v4
+      -
+        name: Build and start containers
+        run: docker compose -f docker-compose.yml up --build -d
+
+      -
+        name: Check cluster logs
+        run: docker compose -f docker-compose.yml logs
+
+      -
+        name: Check status of the cluster containers
+        run: docker compose -f docker-compose.yml ps
+
+      -
+        name: Check status of Slurm
+        run: docker exec slurm-frontend sinfo
+
+      -
+        name: Run a Slurm job
+        run: docker exec slurm-frontend srun hostname
+
+      -
+        name: Test ssh access to Slurm compute nodes
+        run: |
+          docker exec slurm-frontend timeout 1s ssh slurmnode1 hostname
+          docker exec slurm-frontend timeout 1s ssh slurmnode2 hostname
+          docker exec slurm-frontend timeout 1s ssh slurmnode3 hostname
+
+      -
+        name: Load spack-stack envs
+        run: |
+          docker exec slurm-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-mpas-env; module list"
+          docker exec slurm-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-fv3-env; module list"
+
+      -
+        name: Shut down Slurm cluster containers
+        run: docker compose -f docker-compose.yml down

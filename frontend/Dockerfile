@@ -48,6 +48,7 @@ RUN wget https://sourceforge.net/projects/lmod/files/lua-5.1.4.9.tar.bz2 \
  && make -j 4 \
  && make install \
  && echo "source /usr/lmod/lmod/init/bash" >> /etc/bash.bashrc \
+ && echo "source /usr/lmod/lmod/init/bash" >> /etc/profile \
  && popd \
  && rm -rf lua* Lmod
 
