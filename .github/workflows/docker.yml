@@ -746,8 +746,8 @@ jobs:
       -
         name: Load spack-stack envs
         run: |
-          docker exec spack-stack-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-mpas-env; module list"
-          docker exec spack-stack-frontend "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-fv3-env; module list"
+          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-mpas-env; module list"
+          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-fv3-env; module list"
 
       -
         name: Shut down Slurm cluster containers
