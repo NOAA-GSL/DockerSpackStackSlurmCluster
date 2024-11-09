@@ -718,15 +718,15 @@ jobs:
         uses: actions/checkout@v4
       -
         name: Build and start containers
-        run: docker compose -f docker-compose.yml up --build -d
+        run: docker compose -f docker-compose-test.yml up --build -d
 
       -
         name: Check cluster logs
-        run: docker compose -f docker-compose.yml logs
+        run: docker compose -f docker-compose-test.yml logs
 
       -
         name: Check status of the cluster containers
-        run: docker compose -f docker-compose.yml ps
+        run: docker compose -f docker-compose-test.yml ps
 
       -
         name: Check status of Slurm
@@ -750,5 +750,10 @@ jobs:
           docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-fv3-env; module list"
 
       -
+        name: Compile and run MPI program
+        run: |
+          docker exec spack-stack-frontend bash -l -c "cd test; ./test_hello.sh"
+
+      -
         name: Shut down Slurm cluster containers
-        run: docker compose -f docker-compose.yml down
+        run: docker compose -f docker-compose-test.yml down
