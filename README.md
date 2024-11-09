@@ -62,8 +62,9 @@ docker exec -it spack-stack-frontend bash -l
 # Loading and using spack-stack
 
 First, run a login shell in the container:
-
-`docker exec -it spack-stack-frontend bash -l`
+```
+docker exec -it spack-stack-frontend bash -l
+```
 
 Next, load the spack-stack base environment:
 
@@ -74,13 +75,13 @@ module load stack-openmpi
 module load stack-python
 ```
 
-Once the basic spack-stack modules are loaded, you can choose from multiple environments for different purposes.
+Once the basic spack-stack modules are loaded, you can choose from multiple spack-stack environments for different purposes.
 
 For example:
 
 * FV3:
   ```
-  module load jedi-fv3-env`
+  module load jedi-fv3-env
   ```
 
 * MPAS
