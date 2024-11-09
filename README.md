@@ -12,8 +12,8 @@ https://medium.com/analytics-vidhya/slurm-cluster-with-docker-9f242deee601
 There are three containers:
 
 * A frontend container that acts as a Slurm cluster login node.
-  spack-stack is installed on the frontend in /opt which is mounted
-  across the cluster as a shared volume with docker compose
+  Spack-stack is installed on the frontend in /opt which is mounted
+  across the cluster as a shared volume using docker compose
 * A master container that acts as a Slurm master controller node
 * A node container that acts as a Slurm compute node
 
@@ -21,9 +21,10 @@ These containers are launched using Docker Compose to build
 a fully functioning Slurm cluster.  A `docker-compose.yml`
 file defines the cluster, specifying ports and volumes to
 be shared.  Multiple instances of the node container can be
-used to create clusters of different sizes.  The cluster
-behaves as if it were running on multiple nodes even if the
-containers are all running on the same host machine.
+added to `docker-compose.yml` to create clusters of different
+sizes.  The cluster behaves as if it were running on multiple
+nodes even if the containers are all running on the same host
+machine.
 
 # Quick Start
 
@@ -54,8 +55,9 @@ To run a Slurm job:
 docker exec spack-stack-frontend srun hostname
 ```
 To obtain an interactive shell in the container:
-
-`docker exec -it spack-stack-frontend bash -l`
+```
+docker exec -it spack-stack-frontend bash -l
+```
 
 # Loading and using spack-stack
 
@@ -63,7 +65,7 @@ First, run a login shell in the container:
 
 `docker exec -it spack-stack-frontend bash -l`
 
-Next, load spack-stack environment:
+Next, load the spack-stack base environment:
 
 ```
 module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core
@@ -72,12 +74,16 @@ module load stack-openmpi
 module load stack-python
 ```
 
-Once the basic stack modules are loaded, you can choose from multiple environments for different purposes.
+Once the basic spack-stack modules are loaded, you can choose from multiple environments for different purposes.
 
 For example:
 
 * FV3:
-  `module load jedi-fv3-env`
+  ```
+  module load jedi-fv3-env`
+  ```
 
 * MPAS
-  `module load jedi-mpas-env`
+  ```
+  module load jedi-mpas-env
+  ```
