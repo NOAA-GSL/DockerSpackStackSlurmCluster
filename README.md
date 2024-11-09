@@ -61,7 +61,7 @@ docker exec -it spack-stack-frontend bash -l
 
 # Loading and using spack-stack
 
-First, run a login shell in the container:
+First, obtain a login shell in the container:
 ```
 docker exec -it spack-stack-frontend bash -l
 ```
