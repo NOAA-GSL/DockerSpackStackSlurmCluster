@@ -1,9 +1,9 @@
 [![Docker Slurm](https://github.com/NOAA-GSL/DockerSpackStackSlurmCluster/actions/workflows/docker.yml/badge.svg?branch=main)](https://github.com/NOAA-GSL/DockerSpackStackSlurmCluster/actions/workflows/docker.yml)
 
-# Slurm Cluster with [spack-stack](https://spack-stack.readthedocs.io/en/latest/)
-in Ubuntu Docker Images Using Docker Compose
+# Slurm Cluster with spack-stack in Ubuntu Docker images using Docker Compose
 
-This is an installation of a Slurm cluster and spack-stack inside Docker.
+This is a fully functional Slurm cluster with
+[spack-stack](https://spack-stack.readthedocs.io/en/latest/) installed inside a Docker container.
 
 This work is an adaptation of the work done by Rodrigo Ancavil del Pino:
 
@@ -11,10 +11,10 @@ https://medium.com/analytics-vidhya/slurm-cluster-with-docker-9f242deee601
 
 There are three containers:
 
-* A front-end container that acts as a Slurm cluster front-end node.
-  spack-stack is installed on the front-end in /opt which is mounted
-  across the cluster with docker compose as a shared volume
-* A master container that acts as a Slurm master node
+* A frontend container that acts as a Slurm cluster login node.
+  spack-stack is installed on the frontend in /opt which is mounted
+  across the cluster as a shared volume with docker compose
+* A master container that acts as a Slurm master controller node
 * A node container that acts as a Slurm compute node
 
 These containers are launched using Docker Compose to build
@@ -47,9 +47,37 @@ docker-compose -f docker-compose.yml ps
 ```
 To check status of Slurm:
 ```
-docker exec slurm-frontend sinfo
+docker exec spack-stack-frontend sinfo
 ```
 To run a Slurm job:
 ```
-docker exec slurm-frontend srun hostname
+docker exec spack-stack-frontend srun hostname
 ```
+To obtain an interactive shell in the container:
+
+`docker exec -it spack-stack-frontend bash -l`
+
+# Loading and using spack-stack
+
+First, run a login shell in the container:
+
+`docker exec -it spack-stack-frontend bash -l`
+
+Next, load spack-stack environment:
+
+```
+module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core
+module load stack-gcc
+module load stack-openmpi
+module load stack-python
+```
+
+Once the basic stack modules are loaded, you can choose from multiple environments for different purposes.
+
+For example:
+
+* FV3:
+  `module load jedi-fv3-env`
+
+* MPAS
+  `module load jedi-mpas-env`
