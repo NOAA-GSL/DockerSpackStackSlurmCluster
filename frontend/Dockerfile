@@ -28,7 +28,8 @@ RUN apt-get -y update \
         python3-pip \
         python3-setuptools \
         subversion \
-	tcl-dev \
+        tcl-dev \
+        tcsh \
         unzip \
         zstd \
  && pip3 install boto3 \

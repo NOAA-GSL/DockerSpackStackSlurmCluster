@@ -31,7 +31,8 @@ RUN <<EOF
         python3-pip \
         python3-setuptools \
         subversion \
-	tcl-dev \
+        tcl-dev \
+        tcsh \
         unzip \
         zstd
   rm -rf /var/lib/apt/lists/*
