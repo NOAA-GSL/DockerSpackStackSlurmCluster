@@ -3,6 +3,8 @@ services:
         build:
           context: ./frontend
           dockerfile: ./Dockerfile
+          secrets:
+                - github_token
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-frontend:latest
         container_name: spack-stack-frontend
         hostname: slurmfrontend
@@ -107,3 +109,7 @@ services:
 volumes:
         home-vol:
         opt-vol:
+
+secrets:
+        github_token:
+                environment: GITHUB_TOKEN

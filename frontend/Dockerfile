@@ -89,6 +89,13 @@ RUN cd /opt/spack-stack \
  # Ensure PMIx includes munge security plugin to avoid psec/munge runtime warnings.
  # Use require (not just variants preference) so concretization cannot silently pick ~munge. \
  && spack -e . config add 'packages:pmix:require:[+munge]' \
+ # Normalize target selection so builds on different hosts can share buildcache artifacts. \
+ # Use generic targets (x86_64 / aarch64) for maximum portability at the cost of SIMD optimizations. \
+ && if [ "$(uname -m)" = "x86_64" ]; then \
+      spack -e . config add 'packages:all:target:[x86_64]' ; \
+    elif [ "$(uname -m)" = "aarch64" ]; then \
+      spack -e . config add 'packages:all:target:[aarch64]' ; \
+    fi \
  # Configure lmod modules instead of tcl \
  && sed -i 's/tcl/lmod/g' site/modules.yaml \
  # Use unhashed module names like other spack-stack deployments, with Ursa-style suffix rules to avoid naming clashes \

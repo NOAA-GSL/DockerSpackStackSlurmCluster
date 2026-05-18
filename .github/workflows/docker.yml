@@ -58,7 +58,7 @@ jobs:
           docker images
       -
         name: Build and start containers
-        run: docker compose -f docker-compose-test.yml up --build --pull never -d
+        run: GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }} docker compose -f docker-compose-test.yml up --build --pull never -d
       -
         name: Check cluster logs
         run: docker compose -f docker-compose-test.yml logs
