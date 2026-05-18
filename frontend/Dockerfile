@@ -163,7 +163,7 @@ RUN --mount=type=secret,id=github_token <<EOF
   cd envs/unified-env
   spack env activate .
 
-  # Add an autopush buildcache mirror if a GitHub token was provided
+  # Configure buildcache credentials and autopush if a GitHub token was provided
   if [ -f /run/secrets/github_token ]; then
     export GITHUB_TOKEN=$(cat /run/secrets/github_token)
     spack mirror set --autopush --oci-username x-access-token --oci-password-variable GITHUB_TOKEN ghcr_buildcache
