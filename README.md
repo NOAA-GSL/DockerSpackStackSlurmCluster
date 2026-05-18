@@ -26,6 +26,32 @@ sizes.  The cluster behaves as if it were running on multiple
 nodes even if the containers are all running on the same host
 machine.
 
+# Building the Containers
+
+To build the containers from source:
+
+## Master and Node Containers
+
+```bash
+docker build -t ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-master:latest -f master/Dockerfile master/
+docker build -t ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node:latest -f node/Dockerfile node/
+```
+
+## Frontend Container
+
+The frontend container requires a GitHub personal access token (PAT) with package write permissions to push built packages to the GitHub Container Registry build cache. Set your token in an environment variable and pass it as a secret during build:
+
+```bash
+export GITHUB_TOKEN=your_github_pat_here
+docker build --progress=plain \
+  --secret id=github_token,env=GITHUB_TOKEN \
+  -t ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-frontend:latest \
+  -f frontend/Dockerfile \
+  frontend/
+```
+
+**Note:** The `--progress=plain` flag shows full build output. The frontend build compiles 355+ scientific software packages from source and can take several hours on first build. Subsequent builds use the cached packages from GHCR.
+
 # Quick Start
 
 To start the slurm cluster environment:
@@ -69,10 +95,9 @@ docker exec -it spack-stack-frontend bash -l
 Next, load the spack-stack base environment:
 
 ```
-module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core
+module use /opt/spack-stack/envs/unified-env/modules/Core
 module load stack-gcc
 module load stack-openmpi
-module load stack-python
 ```
 
 Once the basic spack-stack modules are loaded, you can choose from multiple spack-stack environments for different purposes.

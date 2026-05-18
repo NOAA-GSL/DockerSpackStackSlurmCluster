@@ -3,7 +3,7 @@ services:
         build:
           context: ./frontend
           dockerfile: ./Dockerfile
-        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend:latest
+        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-frontend:latest
         container_name: spack-stack-frontend
         hostname: slurmfrontend
         user: admin
@@ -16,7 +16,7 @@ services:
         build:
           context: ./master
           dockerfile: ./Dockerfile
-        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master:latest
+        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-master:latest
         container_name: spack-stack-master
         hostname: slurmmaster
         user: admin
@@ -33,7 +33,7 @@ services:
         build:
           context: ./node
           dockerfile: ./Dockerfile
-        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
+        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node:latest
         container_name: spack-stack-node1
         hostname: slurmnode1
         user: admin
@@ -46,7 +46,7 @@ services:
         links:
                 - slurmmaster
   slurmnode2:
-        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
+        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node:latest
         container_name: spack-stack-node2
         hostname: slurmnode2
         user: admin
@@ -59,7 +59,7 @@ services:
         links:
                 - slurmmaster
   slurmnode3:
-        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
+        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node:latest
         container_name: spack-stack-node3
         hostname: slurmnode3
         user: admin
@@ -72,7 +72,7 @@ services:
         links:
                 - slurmmaster
   slurmnode4:
-        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
+        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node:latest
         container_name: spack-stack-node4
         hostname: slurmnode4
         user: admin
@@ -85,7 +85,7 @@ services:
         links:
                 - slurmmaster
   slurmnode5:
-        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node:latest
+        image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node:latest
         container_name: spack-stack-node5
         hostname: slurmnode5
         user: admin
