@@ -54,7 +54,7 @@ docker build --progress=plain \
 
 ### Configuring Parallel Build Jobs
 
-The frontend Dockerfile uses the `SPACK_BUILD_JOBS` build argument to control how many packages Spack compiles in parallel (default: 8). This should match the number of CPU cores available:
+The frontend Dockerfile uses the `SPACK_BUILD_JOBS` build argument to control the number of parallel make jobs (`-j` flag) used when building each package (default: 8). This should match the number of CPU cores available:
 
 **For 8-core systems (default):**
 ```bash
@@ -80,7 +80,7 @@ services:
         SPACK_BUILD_JOBS: 16  # Change from default 8
 ```
 
-**Performance note:** Increasing from 8 to 16 jobs typically provides 20-40% speedup (not 2x) due to dependency constraints and potential memory pressure. On 32GB RAM systems, 16 parallel jobs leaves only ~2GB per job, which may cause swapping for memory-intensive packages like ESMF or JEDI components.
+**Performance note:** Higher values speed up compilation of individual packages, especially large ones like ESMF, JEDI components, and NetCDF. However, on 32GB RAM systems, values above 8 may cause memory pressure during compilation of memory-intensive Fortran packages, potentially leading to swapping or OOM errors.
 
 # Quick Start
 
