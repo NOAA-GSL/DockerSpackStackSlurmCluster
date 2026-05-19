@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       buildcache_cutoff:
-        description: 'Delete buildcache entries older than this (ISO date, e.g. 2026-05-18). Leave empty to skip buildcache cleanup.'
+        description: 'Delete buildcache entries older than this (ISO 8601 date or datetime, e.g. 2026-05-18 or 2026-05-18T14:30:00Z). Leave empty to skip buildcache cleanup.'
         required: false
         default: ''
       dry_run:
@@ -15,6 +15,7 @@ on:
 jobs:
   cleanup-untagged:
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
     permissions:
       packages: write
       contents: read
@@ -93,7 +94,7 @@ jobs:
           delete-only-untagged-versions: 'true'
 
   cleanup-stale-buildcache:
-    if: ${{ github.event.inputs.buildcache_cutoff != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.buildcache_cutoff != '' }}
     runs-on: ubuntu-latest
     permissions:
       packages: write
