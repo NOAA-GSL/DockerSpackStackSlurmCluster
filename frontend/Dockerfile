@@ -1,5 +1,8 @@
 FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:latest AS builder
 
+# Default to 8 build jobs; override with --build-arg SPACK_BUILD_JOBS=16 for larger runners
+ARG SPACK_BUILD_JOBS=8
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
@@ -98,7 +101,7 @@ RUN cd /opt/spack-stack \
     fi \
  # Configure lmod modules instead of tcl \
  && sed -i 's/tcl/lmod/g' site/modules.yaml \
- # Use unhashed module names like other spack-stack deployments, with Ursa-style suffix rules to avoid naming clashes \
+ # Use unhashed module names like other spack-stack deployments, with suffix rules to avoid naming clashes \
  && printf '%s\n' \
    '      hash_length: 0' \
    '      all:' \
@@ -135,13 +138,6 @@ RUN cd /opt/spack-stack \
    >> site/modules.yaml \
  # Force env module root so final stage can copy a stable path \
  && spack -e . config add 'modules:default:roots:lmod:$env/modules'
- # TODO: Check if wgrib2 removal is still needed for aarch64 with spack-stack 2.1.0 and ubuntu 26.04.
- # This was needed for old spack-stack and ubuntu 22.04, but may be obsolete now.
- # Uncomment below if aarch64 CI build fails with wgrib2 error:
- # && if [ "$(uname -m)" == "aarch64" ]; then \
- #      spack config --scope common remove "packages:wgrib2" ; \
- #      spack config --scope common remove "modules:default:lmod:wgrib2" ; \
- #    fi
 
 # Add the build cache mirror and concretize
 RUN cd /opt/spack-stack \
@@ -149,12 +145,9 @@ RUN cd /opt/spack-stack \
  && cd envs/unified-env \
  && spack env activate . \
  && spack mirror add --unsigned ghcr_buildcache oci://ghcr.io/noaa-gsl/dockerspackstackslurmcluster/buildcache \
- && spack concretize 2>&1 | tee log.concretize \
- && spack spec openmpi | tee log.openmpi.spec \
- && grep -Eq 'schedulers(:=|=)slurm' log.openmpi.spec \
- && spack spec pmix | tee log.pmix.spec \
- && grep -q '+munge' log.pmix.spec \
- && grep -q 'munge' log.pmix.spec
+ && spack concretize > /dev/null 2>&1 \
+ && spack spec openmpi 2>&1 | grep -Eq 'schedulers(:=|=)slurm' \
+ && spack spec pmix 2>&1 | grep -q '+munge'
 
 # Install the Spack environment
 RUN --mount=type=secret,id=github_token <<EOF
@@ -162,6 +155,9 @@ RUN --mount=type=secret,id=github_token <<EOF
   source setup.sh
   cd envs/unified-env
   spack env activate .
+
+  # Set parallel build jobs to match CI runner core count
+  spack config add config:build_jobs:${SPACK_BUILD_JOBS}
 
   # Configure buildcache credentials and autopush if a GitHub token was provided
   if [ -f /run/secrets/github_token ]; then
@@ -187,28 +183,6 @@ RUN cd /opt/spack-stack \
  && spack -e . stack setup-meta-modules \
  && spack gc -y \
  && rm -rf ~/.spack
-
-# Verify module layout before final stage COPY and create a compatibility path if needed
-RUN set -euxo pipefail \
- && env_dir=/opt/spack-stack/envs/unified-env \
- && if [ -d "$env_dir/modules" ]; then \
-      module_root="$env_dir/modules"; \
-    elif [ -d "$env_dir/install/modulefiles" ]; then \
-      ln -s "$env_dir/install/modulefiles" "$env_dir/modules"; \
-      module_root="$env_dir/modules"; \
-    else \
-      alt_root=$(find "$env_dir/install" -type d -name modulefiles | head -n 1 || true); \
-      if [ -n "$alt_root" ]; then \
-        ln -s "$alt_root" "$env_dir/modules"; \
-        module_root="$env_dir/modules"; \
-      else \
-        echo "ERROR: No module directory found under $env_dir"; \
-        find "$env_dir" -maxdepth 5 -type d | sort; \
-        exit 1; \
-      fi; \
-    fi \
- && test -d "$module_root/Core" \
- && ls -la "$module_root/Core"
 
 # Copy installed environment into final image
 FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:latest

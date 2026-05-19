@@ -3,6 +3,8 @@ services:
         build:
           context: ./frontend
           dockerfile: ./Dockerfile
+          args:
+                SPACK_BUILD_JOBS: 8
           secrets:
                 - github_token
         image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-frontend:latest

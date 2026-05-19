@@ -52,6 +52,36 @@ docker build --progress=plain \
 
 **Note:** The `--progress=plain` flag shows full build output. The frontend build compiles 355+ scientific software packages from source and can take several hours on first build. Subsequent builds use the cached packages from GHCR.
 
+### Configuring Parallel Build Jobs
+
+The frontend Dockerfile uses the `SPACK_BUILD_JOBS` build argument to control how many packages Spack compiles in parallel (default: 8). This should match the number of CPU cores available:
+
+**For 8-core systems (default):**
+```bash
+docker build --build-arg SPACK_BUILD_JOBS=8 ...
+```
+
+**For 16-core systems:**
+```bash
+docker build --build-arg SPACK_BUILD_JOBS=16 ...
+```
+
+**With Docker Compose:**
+```bash
+docker compose build --build-arg SPACK_BUILD_JOBS=16
+```
+
+You can also modify the default in `docker-compose.yml`:
+```yaml
+services:
+  slurmfrontend:
+    build:
+      args:
+        SPACK_BUILD_JOBS: 16  # Change from default 8
+```
+
+**Performance note:** Increasing from 8 to 16 jobs typically provides 20-40% speedup (not 2x) due to dependency constraints and potential memory pressure. On 32GB RAM systems, 16 parallel jobs leaves only ~2GB per job, which may cause swapping for memory-intensive packages like ESMF or JEDI components.
+
 # Quick Start
 
 To start the slurm cluster environment:
