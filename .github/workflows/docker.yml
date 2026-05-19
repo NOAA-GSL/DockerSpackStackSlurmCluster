@@ -3,21 +3,44 @@ name: Docker Slurm
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
 
 env:
-  REGISTRY_FRONTEND_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend
-  REGISTRY_MASTER_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master
-  REGISTRY_NODE_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node
-  AWS_REGION: us-east-2
+  SPACK_STACK_VERSION: 2.1.0
+  REGISTRY_FRONTEND_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-frontend
+  REGISTRY_MASTER_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-master
+  REGISTRY_NODE_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node
 
 jobs:
 
-  build-frontend-arm64:
-    runs-on: LinuxARM64-8core-32G-300Gb
-    #needs: docker_compose_test
+  resolve_versions:
+    name: Resolve Version Tags
+    runs-on: ubuntu-latest
+    outputs:
+      ubuntu_version: ${{ steps.resolve.outputs.ubuntu_version }}
+    steps:
+      -
+        name: Resolve concrete ubuntu:latest version
+        id: resolve
+        run: |
+          UBUNTU_VERSION=$(docker run --rm ubuntu:latest bash -lc '. /etc/os-release && echo "$VERSION_ID"')
+          echo "ubuntu_version=${UBUNTU_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ubuntu:latest to VERSION_ID=${UBUNTU_VERSION}"
+
+  build-test-push-amd64:
+    runs-on: ubuntu2204-8c-32g-300ssd
+    needs:
+      - resolve_versions
     timeout-minutes: 360
     permissions:
       packages: write
@@ -25,7 +48,184 @@ jobs:
       id-token: write
     steps:
       -
-        # Beta ARM runners do not have Docker installed
+        name: Checkout repository
+        uses: actions/checkout@v4
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+      -
+        name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false
+      -
+        name: Prune pre-loaded GHA docker images
+        run: |
+          docker images
+          docker image prune -a -f
+          docker images
+      -
+        name: Build frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          tags: ${{ env.REGISTRY_FRONTEND_IMAGE }}:latest
+          build-args: |
+            SPACK_BUILD_JOBS=8
+          secrets: |
+            "github_token=${{ secrets.GITHUB_TOKEN }}"
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache,mode=max
+          load: true
+      -
+        name: Build master image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./master
+          file: ./master/Dockerfile
+          platforms: linux/amd64
+          tags: ${{ env.REGISTRY_MASTER_IMAGE }}:latest
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache,mode=max
+          load: true
+      -
+        name: Build node image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./node
+          file: ./node/Dockerfile
+          platforms: linux/amd64
+          tags: ${{ env.REGISTRY_NODE_IMAGE }}:latest
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache,mode=max
+          load: true
+      -
+        name: Start containers for testing
+        run: docker compose -f docker-compose-test.yml up --pull never -d
+      -
+        name: Check cluster logs
+        run: docker compose -f docker-compose-test.yml logs
+      -
+        name: Check status of the cluster containers
+        run: docker compose -f docker-compose-test.yml ps
+      -
+        name: Check status of Slurm
+        run: docker exec spack-stack-frontend sinfo
+      -
+        name: Run a Slurm job
+        run: docker exec spack-stack-frontend srun hostname
+      -
+        name: Test ssh access to Slurm compute nodes
+        run: |
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode1 hostname
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode2 hostname
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode3 hostname
+      -
+        name: Load spack-stack envs
+        run: |
+          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/modules/Core ; module load stack-gcc stack-openmpi jedi-mpas-env; module list"
+          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/modules/Core ; module load stack-gcc stack-openmpi jedi-fv3-env; module list"
+      -
+        name: Compile and run MPI program
+        run: docker exec spack-stack-frontend bash -l -c "cd test; ./test_hello.sh"
+      -
+        name: Shut down Slurm cluster containers
+        if: always()
+        run: docker compose -f docker-compose-test.yml down
+      -
+        name: Push frontend by digest
+        id: push-frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            SPACK_BUILD_JOBS=8
+          secrets: |
+            "github_token=${{ secrets.GITHUB_TOKEN }}"
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache
+          outputs: type=image,name=${{ env.REGISTRY_FRONTEND_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      -
+        name: Push master by digest
+        id: push-master
+        uses: docker/build-push-action@v5
+        with:
+          context: ./master
+          file: ./master/Dockerfile
+          platforms: linux/amd64
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache
+          outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      -
+        name: Push node by digest
+        id: push-node
+        uses: docker/build-push-action@v5
+        with:
+          context: ./node
+          file: ./node/Dockerfile
+          platforms: linux/amd64
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache
+          outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      -
+        name: Export digests
+        run: |
+          mkdir -p /tmp/digests/frontend /tmp/digests/master /tmp/digests/node
+          frontend_digest="${{ steps.push-frontend.outputs.digest }}"
+          master_digest="${{ steps.push-master.outputs.digest }}"
+          node_digest="${{ steps.push-node.outputs.digest }}"
+          touch "/tmp/digests/frontend/${frontend_digest#sha256:}"
+          touch "/tmp/digests/master/${master_digest#sha256:}"
+          touch "/tmp/digests/node/${node_digest#sha256:}"
+      -
+        name: Upload frontend digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-digests-linux-amd64
+          path: /tmp/digests/frontend/*
+          if-no-files-found: error
+          retention-days: 1
+      -
+        name: Upload master digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-digests-linux-amd64
+          path: /tmp/digests/master/*
+          if-no-files-found: error
+          retention-days: 1
+      -
+        name: Upload node digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-digests-linux-amd64
+          path: /tmp/digests/node/*
+          if-no-files-found: error
+          retention-days: 1
+      -
+        name: Debug session
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 60
+        with:
+          limit-access-to-actor: true
+
+  build-test-push-arm64:
+    runs-on: LinuxARM64-8core-32G-300Gb
+    needs:
+      - resolve_versions
+    timeout-minutes: 360
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+    steps:
+      -
         name: Install Docker
         run: |
            # Uninstall incompatible packages
@@ -52,38 +252,13 @@ jobs:
         name: Test Docker Installation
         run: docker run hello-world
       -
-        name: Install AWS CLI
-        run: sudo apt-get install -y --no-install-recommends awscli
-      -
-        name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-          role-duration-seconds: 21600 # 6 hours
-          role-session-name: spackstackslurmcluster-github-actions
-      -
-        name: Test authentication
-        run: |
-          aws sts get-caller-identity
-      -
         name: Checkout repository
         uses: actions/checkout@v4
       -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY_FRONTEND_IMAGE }}
-          tags: |
-            type=raw,value=latest
-          flavor: |
-            latest=true
-            prefix=
-            suffix=
-      -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
       -
         name: Login to GHCR
         uses: docker/login-action@v3
@@ -99,127 +274,141 @@ jobs:
           docker image prune -a -f
           docker images
       -
-        name: Build and push by digest
-        id: build
+        name: Build frontend image
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
           platforms: linux/arm64
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.REGISTRY_FRONTEND_IMAGE }}:latest
+          build-args: |
+            SPACK_BUILD_JOBS=8
           secrets: |
-            "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-            "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-            "session_token=${{ env.AWS_SESSION_TOKEN }}"
+            "github_token=${{ secrets.GITHUB_TOKEN }}"
           cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache
           cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache,mode=max
-          outputs: type=image,name=${{ env.REGISTRY_FRONTEND_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          load: true
       -
-        name: Export digest
+        name: Build master image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./master
+          file: ./master/Dockerfile
+          platforms: linux/arm64
+          tags: ${{ env.REGISTRY_MASTER_IMAGE }}:latest
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache,mode=max
+          load: true
+      -
+        name: Build node image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./node
+          file: ./node/Dockerfile
+          platforms: linux/arm64
+          tags: ${{ env.REGISTRY_NODE_IMAGE }}:latest
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache,mode=max
+          load: true
+      -
+        name: Start containers for testing
+        run: docker compose -f docker-compose-test.yml up --pull never -d
+      -
+        name: Check cluster logs
+        run: docker compose -f docker-compose-test.yml logs
+      -
+        name: Check status of the cluster containers
+        run: docker compose -f docker-compose-test.yml ps
+      -
+        name: Check status of Slurm
+        run: docker exec spack-stack-frontend sinfo
+      -
+        name: Run a Slurm job
+        run: docker exec spack-stack-frontend srun hostname
+      -
+        name: Test ssh access to Slurm compute nodes
         run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode1 hostname
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode2 hostname
+          docker exec spack-stack-frontend timeout 1s ssh slurmnode3 hostname
       -
-        name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-digests-linux-arm64
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-      -
-        name: Debug session
-        if: ${{ failure() }}
-        uses: mxschmitt/action-tmate@v3
-        timeout-minutes: 60
-        with:
-          limit-access-to-actor: true
-
-  build-frontend-amd64:
-    runs-on: ubuntu2204-8c-32g-300ssd
-    #needs: docker_compose_test
-    timeout-minutes: 360
-    permissions:
-      packages: write
-      contents: read
-      id-token: write
-    steps:
-      -
-        name: Checkout repository
-        uses: actions/checkout@v4
-      -
-        name: Install AWS CLI
-        run: sudo apt-get install -y --no-install-recommends awscli
-      -
-        name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_GITHUB_ROLE }}
-          role-duration-seconds: 21600 # 6 hours
-          role-session-name: spackstackslurmcluster-github-actions
-      -
-        name: Test authentication
+        name: Load spack-stack envs
         run: |
-          aws sts get-caller-identity
+          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/modules/Core ; module load stack-gcc stack-openmpi jedi-mpas-env; module list"
+          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/modules/Core ; module load stack-gcc stack-openmpi jedi-fv3-env; module list"
       -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY_FRONTEND_IMAGE }}
-          tags: |
-            type=raw,value=latest
-          flavor: |
-            latest=true
-            prefix=
-            suffix=
+        name: Compile and run MPI program
+        run: docker exec spack-stack-frontend bash -l -c "cd test; ./test_hello.sh"
       -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        name: Shut down Slurm cluster containers
+        if: always()
+        run: docker compose -f docker-compose-test.yml down
       -
-        name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false
-      -
-        name: Prune pre-loaded GHA docker images
-        run: |
-          docker images
-          docker image prune -a -f
-          docker images
-      -
-        name: Build spack-stack and push by digest
-        id: build
+        name: Push frontend by digest
+        id: push-frontend
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/arm64
+          build-args: |
+            SPACK_BUILD_JOBS=8
           secrets: |
-            "access_key_id=${{ env.AWS_ACCESS_KEY_ID }}"
-            "secret_access_key=${{ env.AWS_SECRET_ACCESS_KEY }}"
-            "session_token=${{ env.AWS_SESSION_TOKEN }}"
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache,mode=max
+            "github_token=${{ secrets.GITHUB_TOKEN }}"
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache
           outputs: type=image,name=${{ env.REGISTRY_FRONTEND_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
-        name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+        name: Push master by digest
+        id: push-master
+        uses: docker/build-push-action@v5
+        with:
+          context: ./master
+          file: ./master/Dockerfile
+          platforms: linux/arm64
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache
+          outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
-        name: Upload digest
+        name: Push node by digest
+        id: push-node
+        uses: docker/build-push-action@v5
+        with:
+          context: ./node
+          file: ./node/Dockerfile
+          platforms: linux/arm64
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache
+          outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      -
+        name: Export digests
+        run: |
+          mkdir -p /tmp/digests/frontend /tmp/digests/master /tmp/digests/node
+          frontend_digest="${{ steps.push-frontend.outputs.digest }}"
+          master_digest="${{ steps.push-master.outputs.digest }}"
+          node_digest="${{ steps.push-node.outputs.digest }}"
+          touch "/tmp/digests/frontend/${frontend_digest#sha256:}"
+          touch "/tmp/digests/master/${master_digest#sha256:}"
+          touch "/tmp/digests/node/${node_digest#sha256:}"
+      -
+        name: Upload frontend digest
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-digests-linux-amd64
-          path: /tmp/digests/*
+          name: frontend-digests-linux-arm64
+          path: /tmp/digests/frontend/*
+          if-no-files-found: error
+          retention-days: 1
+      -
+        name: Upload master digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-digests-linux-arm64
+          path: /tmp/digests/master/*
+          if-no-files-found: error
+          retention-days: 1
+      -
+        name: Upload node digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-digests-linux-arm64
+          path: /tmp/digests/node/*
           if-no-files-found: error
           retention-days: 1
       -
@@ -233,8 +422,13 @@ jobs:
   merge-frontend:
     runs-on: ubuntu-latest
     needs:
-      - build-frontend-amd64
-      - build-frontend-arm64
+      - build-test-push-amd64
+      - build-test-push-arm64
+      - resolve_versions
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
     steps:
       -
         name: Checkout repository
@@ -257,6 +451,7 @@ jobs:
           images: ${{ env.REGISTRY_FRONTEND_IMAGE }}
           tags: |
             type=raw,value=latest
+            type=raw,value=ubuntu-${{ needs.resolve_versions.outputs.ubuntu_version }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
           flavor: |
             latest=true
             prefix=
@@ -280,174 +475,16 @@ jobs:
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_FRONTEND_IMAGE }}:${{ steps.meta.outputs.version }}
 
-  build-master-arm64:
-    runs-on: LinuxARM64-8core-32G-300Gb
-    #needs: docker_compose_test
-    timeout-minutes: 360
-    permissions:
-      packages: write
-      contents: read
-      id-token: write
-    steps:
-      -
-        # Beta ARM runners do not have Docker installed
-        name: Install Docker
-        run: |
-           # Uninstall incompatible packages
-           for pkg in docker.io containerd runc; do sudo apt-get remove $pkg; done
-           # Add Docker's official GPG key:
-           sudo apt-get update
-           sudo apt-get install ca-certificates curl
-           sudo install -m 0755 -d /etc/apt/keyrings
-           sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-           sudo chmod a+r /etc/apt/keyrings/docker.asc
-           # Add the repository to Apt sources:
-           echo \
-             "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-             $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-             sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-           sudo apt-get update -y
-           # Install docker packages
-           sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-           # Allow runner use to run docker without sudo
-           sudo usermod -aG docker $USER
-           sudo apt-get install acl
-           sudo setfacl --modify user:$USER:rw /var/run/docker.sock
-      -
-        name: Test Docker Installation
-        run: docker run hello-world
-      -
-        name: Checkout repository
-        uses: actions/checkout@v4
-      -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY_MASTER_IMAGE }}
-          tags: |
-            type=raw,value=latest
-          flavor: |
-            latest=true
-            prefix=
-            suffix=
-      -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      -
-        name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false
-      -
-        name: Prune pre-loaded GHA docker images
-        run: |
-          docker images
-          docker image prune -a -f
-          docker images
-      -
-        name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: ./master
-          file: ./master/Dockerfile
-          platforms: linux/arm64
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache,mode=max
-          outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-      -
-        name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-      -
-        name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: master-digests-linux-arm64
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  build-master-amd64:
-    runs-on: ubuntu2204-8c-32g-300ssd
-    #needs: docker_compose_test
-    timeout-minutes: 360
-    permissions:
-      packages: write
-      contents: read
-      id-token: write
-    steps:
-      -
-        name: Checkout repository
-        uses: actions/checkout@v4
-      -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY_MASTER_IMAGE }}
-          tags: |
-            type=raw,value=latest
-          flavor: |
-            latest=true
-            prefix=
-            suffix=
-      -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      -
-        name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false
-      -
-        name: Prune pre-loaded GHA docker images
-        run: |
-          docker images
-          docker image prune -a -f
-          docker images
-      -
-        name: Build spack-stack and push by digest
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: ./master
-          file: ./master/Dockerfile
-          platforms: linux/amd64
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache,mode=max
-          outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-      -
-        name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-      -
-        name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: master-digests-linux-amd64
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
   merge-master:
     runs-on: ubuntu-latest
     needs:
-      - build-master-amd64
-      - build-master-arm64
+      - build-test-push-amd64
+      - build-test-push-arm64
+      - resolve_versions
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
     steps:
       -
         name: Checkout repository
@@ -470,6 +507,7 @@ jobs:
           images: ${{ env.REGISTRY_MASTER_IMAGE }}
           tags: |
             type=raw,value=latest
+            type=raw,value=ubuntu-${{ needs.resolve_versions.outputs.ubuntu_version }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
           flavor: |
             latest=true
             prefix=
@@ -493,174 +531,16 @@ jobs:
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_MASTER_IMAGE }}:${{ steps.meta.outputs.version }}
 
-  build-node-arm64:
-    runs-on: LinuxARM64-8core-32G-300Gb
-    #needs: docker_compose_test
-    timeout-minutes: 360
-    permissions:
-      packages: write
-      contents: read
-      id-token: write
-    steps:
-      -
-        # Beta ARM runners do not have Docker installed
-        name: Install Docker
-        run: |
-           # Uninstall incompatible packages
-           for pkg in docker.io containerd runc; do sudo apt-get remove $pkg; done
-           # Add Docker's official GPG key:
-           sudo apt-get update
-           sudo apt-get install ca-certificates curl
-           sudo install -m 0755 -d /etc/apt/keyrings
-           sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-           sudo chmod a+r /etc/apt/keyrings/docker.asc
-           # Add the repository to Apt sources:
-           echo \
-             "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-             $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-             sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-           sudo apt-get update -y
-           # Install docker packages
-           sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-           # Allow runner use to run docker without sudo
-           sudo usermod -aG docker $USER
-           sudo apt-get install acl
-           sudo setfacl --modify user:$USER:rw /var/run/docker.sock
-      -
-        name: Test Docker Installation
-        run: docker run hello-world
-      -
-        name: Checkout repository
-        uses: actions/checkout@v4
-      -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY_NODE_IMAGE }}
-          tags: |
-            type=raw,value=latest
-          flavor: |
-            latest=true
-            prefix=
-            suffix=
-      -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      -
-        name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false
-      -
-        name: Prune pre-loaded GHA docker images
-        run: |
-          docker images
-          docker image prune -a -f
-          docker images
-      -
-        name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: ./node
-          file: ./node/Dockerfile
-          platforms: linux/arm64
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache,mode=max
-          outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-      -
-        name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-      -
-        name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: node-digests-linux-arm64
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  build-node-amd64:
-    runs-on: ubuntu2204-8c-32g-300ssd
-    #needs: docker_compose_test
-    timeout-minutes: 360
-    permissions:
-      packages: write
-      contents: read
-      id-token: write
-    steps:
-      -
-        name: Checkout repository
-        uses: actions/checkout@v4
-      -
-        name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY_NODE_IMAGE }}
-          tags: |
-            type=raw,value=latest
-          flavor: |
-            latest=true
-            prefix=
-            suffix=
-      -
-        name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      -
-        name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false
-      -
-        name: Prune pre-loaded GHA docker images
-        run: |
-          docker images
-          docker image prune -a -f
-          docker images
-      -
-        name: Build spack-stack and push by digest
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: ./node
-          file: ./node/Dockerfile
-          platforms: linux/amd64
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache,mode=max
-          outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-      -
-        name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-      -
-        name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: node-digests-linux-amd64
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
   merge-node:
     runs-on: ubuntu-latest
     needs:
-      - build-node-amd64
-      - build-node-arm64
+      - build-test-push-amd64
+      - build-test-push-arm64
+      - resolve_versions
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
     steps:
       -
         name: Checkout repository
@@ -683,6 +563,7 @@ jobs:
           images: ${{ env.REGISTRY_NODE_IMAGE }}
           tags: |
             type=raw,value=latest
+            type=raw,value=ubuntu-${{ needs.resolve_versions.outputs.ubuntu_version }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
           flavor: |
             latest=true
             prefix=
@@ -706,54 +587,3 @@ jobs:
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_NODE_IMAGE }}:${{ steps.meta.outputs.version }}
 
-  docker-compose-test:
-    runs-on: ubuntu2204-8c-32g-300ssd
-    needs:
-      - merge-frontend
-      - merge-master
-      - merge-node
-    steps:
-      -
-        name: Checkout Repository
-        uses: actions/checkout@v4
-      -
-        name: Build and start containers
-        run: docker compose -f docker-compose-test.yml up --build -d
-
-      -
-        name: Check cluster logs
-        run: docker compose -f docker-compose-test.yml logs
-
-      -
-        name: Check status of the cluster containers
-        run: docker compose -f docker-compose-test.yml ps
-
-      -
-        name: Check status of Slurm
-        run: docker exec spack-stack-frontend sinfo
-
-      -
-        name: Run a Slurm job
-        run: docker exec spack-stack-frontend srun hostname
-
-      -
-        name: Test ssh access to Slurm compute nodes
-        run: |
-          docker exec spack-stack-frontend timeout 1s ssh slurmnode1 hostname
-          docker exec spack-stack-frontend timeout 1s ssh slurmnode2 hostname
-          docker exec spack-stack-frontend timeout 1s ssh slurmnode3 hostname
-
-      -
-        name: Load spack-stack envs
-        run: |
-          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-mpas-env; module list"
-          docker exec spack-stack-frontend bash -l -c "module use /opt/spack-stack/envs/unified-env/install/modulefiles/Core ; module load stack-gcc stack-openmpi stack-python jedi-fv3-env; module list"
-
-      -
-        name: Compile and run MPI program
-        run: |
-          docker exec spack-stack-frontend bash -l -c "cd test; ./test_hello.sh"
-
-      -
-        name: Shut down Slurm cluster containers
-        run: docker compose -f docker-compose-test.yml down

@@ -1,40 +1,45 @@
 name: PackageCleanup
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
+    inputs:
+      buildcache_cutoff:
+        description: 'Delete buildcache entries older than this (ISO date, e.g. 2026-05-18). Leave empty to skip buildcache cleanup.'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Set to true to only list what would be deleted without actually deleting'
+        required: false
+        default: 'true'
 
 jobs:
-  cleanup-packages:
+  cleanup-untagged:
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
     steps:
       -
-        name: Remove untagged versions of dockerspackstackslurmcluster/frontend
+        name: Remove untagged versions of dockerspackstackslurmcluster/slurm-spack-stack-frontend
         uses: actions/delete-package-versions@v5
         with: 
-          package-name: 'dockerspackstackslurmcluster/frontend'
+          package-name: 'dockerspackstackslurmcluster/slurm-spack-stack-frontend'
           package-type: 'container'
           min-versions-to-keep: 0
           delete-only-untagged-versions: 'true'
       -
-        name: Remove untagged versions of dockerspackstackslurmcluster/master
+        name: Remove untagged versions of dockerspackstackslurmcluster/slurm-spack-stack-master
         uses: actions/delete-package-versions@v5
         with: 
-          package-name: 'dockerspackstackslurmcluster/master'
+          package-name: 'dockerspackstackslurmcluster/slurm-spack-stack-master'
           package-type: 'container'
           min-versions-to-keep: 0
           delete-only-untagged-versions: 'true'
       -
-        name: Remove untagged versions of dockerspackstackslurmcluster/node
+        name: Remove untagged versions of dockerspackstackslurmcluster/slurm-spack-stack-node
         uses: actions/delete-package-versions@v5
         with: 
-          package-name: 'dockerspackstackslurmcluster/node'
+          package-name: 'dockerspackstackslurmcluster/slurm-spack-stack-node'
           package-type: 'container'
           min-versions-to-keep: 0
           delete-only-untagged-versions: 'true'
@@ -86,3 +91,76 @@ jobs:
           package-type: 'container'
           min-versions-to-keep: 0
           delete-only-untagged-versions: 'true'
+
+  cleanup-stale-buildcache:
+    if: ${{ github.event.inputs.buildcache_cutoff != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      -
+        name: Clean stale buildcache entries
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const cutoff = new Date('${{ github.event.inputs.buildcache_cutoff }}');
+            const dryRun = '${{ github.event.inputs.dry_run }}' === 'true';
+            const org = 'noaa-gsl';
+            const packageName = 'dockerspackstackslurmcluster/buildcache';
+
+            console.log(`Cutoff date: ${cutoff.toISOString()}`);
+            console.log(`Dry run: ${dryRun}`);
+
+            let deleted = 0;
+            let kept = 0;
+            let page = 1;
+            const perPage = 100;
+
+            while (true) {
+              const versions = await github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg({
+                package_type: 'container',
+                package_name: packageName,
+                org: org,
+                per_page: perPage,
+                page: page,
+              });
+
+              if (versions.data.length === 0) break;
+
+              for (const version of versions.data) {
+                const createdAt = new Date(version.created_at);
+                const tags = version.metadata?.container?.tags || [];
+
+                // Never delete index entries - they are updated in place by spack buildcache update-index
+                const isIndex = tags.some(t => t.includes('index') || t.startsWith('_'));
+                if (isIndex) {
+                  console.log(`Preserving index: ${version.id} (tags: ${tags.join(', ')})`);
+                  kept++;
+                  continue;
+                }
+
+                if (createdAt < cutoff) {
+                  if (dryRun) {
+                    console.log(`[DRY RUN] Would delete: ${version.id} (created ${createdAt.toISOString()}, tags: ${tags.join(', ')})`);
+                  } else {
+                    console.log(`Deleting: ${version.id} (created ${createdAt.toISOString()}, tags: ${tags.join(', ')})`);
+                    await github.rest.packages.deletePackageVersionForOrg({
+                      package_type: 'container',
+                      package_name: packageName,
+                      org: org,
+                      package_version_id: version.id,
+                    });
+                  }
+                  deleted++;
+                } else {
+                  console.log(`Keeping: ${version.id} (created ${createdAt.toISOString()}, tags: ${tags.join(', ')})`);
+                  kept++;
+                }
+              }
+
+              if (versions.data.length < perPage) break;
+              page++;
+            }
+
+            console.log(`\nSummary: ${deleted} ${dryRun ? 'would be ' : ''}deleted, ${kept} kept`);

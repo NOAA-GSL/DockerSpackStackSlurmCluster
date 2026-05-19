@@ -1,5 +1,8 @@
 FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:latest AS builder
 
+# Default to 8 build jobs; override with --build-arg SPACK_BUILD_JOBS=16 for larger runners
+ARG SPACK_BUILD_JOBS=8
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
@@ -8,16 +11,16 @@ SHELL ["/bin/bash", "-c"]
 # Install OS packages
 RUN apt-get -y update \
  && apt-get -y install --no-install-recommends \
-        awscli \
         bc \
         build-essential \
         ca-certificates \
         curl \
-	emacs \
+        emacs \
         file \
-        g++ \
-        gcc \
-        gfortran \
+        gcc-13 \
+        g++-13 \
+        gfortran-13 \
+        cpp-13 \
         git \
         gnupg2 \
         iproute2 \
@@ -28,22 +31,21 @@ RUN apt-get -y update \
         python3-pip \
         python3-setuptools \
         subversion \
+        lua5.4 \
+        liblua5.4-dev \
+        lua-posix \
+        lua-filesystem \
         tcl-dev \
         tcsh \
         unzip \
         zstd \
- && pip3 install boto3 \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+    --slave /usr/bin/g++ g++ /usr/bin/g++-13 \
+    --slave /usr/bin/gfortran gfortran /usr/bin/gfortran-13
 
-# Install Lua and Lmod
-RUN wget https://sourceforge.net/projects/lmod/files/lua-5.1.4.9.tar.bz2 \
- && tar xvfj lua-5.1.4.9.tar.bz2 \
- && pushd lua-5.1.4.9 \
- && ./configure --prefix=/usr \
- && make -j 4 \
- && make install \
- && popd \
- && git clone --recursive https://github.com/TACC/Lmod.git \
+# Install Lmod
+RUN git clone --recursive https://github.com/TACC/Lmod.git \
  && pushd Lmod \
  && ./configure --prefix=/usr \
  && make -j 4 \
@@ -51,106 +53,144 @@ RUN wget https://sourceforge.net/projects/lmod/files/lua-5.1.4.9.tar.bz2 \
  && echo "source /usr/lmod/lmod/init/bash" >> /etc/bash.bashrc \
  && echo "source /usr/lmod/lmod/init/bash" >> /etc/profile \
  && popd \
- && rm -rf lua* Lmod
+ && rm -rf Lmod
 
-# Copy patch files into /tmp for use when installing spack-stack
-COPY cc.patch.aarch64 /tmp
-COPY cc.patch.x86_64 /tmp
-COPY openmpi.package.py.patch.aarch64 /tmp
-COPY openmpi.package.py.patch.x86_64 /tmp
-
-# Clone spack-stack and create and configure the unified env
+# Clone spack-stack 2.1.0
 RUN cd /opt \
- && git clone -b release/1.8.0 --recurse-submodules https://github.com/jcsda/spack-stack.git \
- && pushd spack-stack \
- && . ./setup.sh \
- && pushd spack \
- && mv /tmp/cc.patch.$(uname -m) cc.patch \
- && mv /tmp/openmpi.package.py.patch.$(uname -m) openmpi.package.py.patch \
- && patch -f -p0 < openmpi.package.py.patch \
- && patch -f -p0 < cc.patch \
- && popd \
- && spack stack create env --site linux.default --template unified-dev --name unified-env --compiler gcc \
- && pushd envs/unified-env \
+ && git clone -b 2.1.0 --recurse-submodules https://github.com/jcsda/spack-stack.git
+
+# Create and configure the unified env using the container site
+RUN cd /opt/spack-stack \
+ && source setup.sh \
+ && spack stack create env --site container --template unified-dev --name unified-env --compiler gcc \
+ && cd envs/unified-env \
  && spack env activate . \
- && spack mirror add --s3-access-key-id "" --s3-access-key-secret "" s3_spack_stack_buildcache_ro s3://chiltepin-us-east-2/spack-stack/ \
- && export SPACK_SYSTEM_CONFIG_PATH="$PWD/site" \
- && spack external find --scope system \
+ # Fix system external versions for Ubuntu 26.04 \
+ && spack external find --scope "env:/opt/spack-stack/envs/unified-env:/opt/spack-stack/envs/unified-env/site" \
     --exclude cmake \
     --exclude curl \
     --exclude openssl \
     --exclude openssh \
     --exclude python \
- && spack external find --scope system wget \
- && spack compiler find --scope system \
- && unset SPACK_SYSTEM_CONFIG_PATH \
- && spack config add "packages:all:compiler:[gcc@11.4.0]" \
- && spack config add "packages:all:providers:mpi:[openmpi@4.1.6]" \
- && spack config add "packages:fontconfig:variants:+pic" \
- && spack config add "packages:pixman:variants:+pic" \
- && spack config add "packages:cairo:variants:+pic" \
- && spack config --scope env:/opt/spack-stack/envs/unified-env:common add "packages:openmpi:require:~internal-hwloc +two_level_namespace schedulers=slurm +pmi" \
+ && spack external find --scope "env:/opt/spack-stack/envs/unified-env:/opt/spack-stack/envs/unified-env/site" wget \
+ # Add slurm as an external package \
  && echo "  slurm:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    externals:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- && echo "    - spec: slurm@23.11.7" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
+ && echo "    - spec: slurm@25.11.5" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "      prefix: /usr" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    buildable: false" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- && if [ "$(uname -m)" == "aarch64" ]; then \
-      spack config --scope env:/opt/spack-stack/envs/unified-env:common remove "packages:wgrib2" ; \
-      spack config --scope env:/opt/spack-stack/envs/unified-env:common remove "modules:default:lmod:wgrib2" ; \
+ # Add munge as an external package so spack uses the system munge (same one munged starts at boot) \
+ # rather than building its own, which would cause LD_LIBRARY_PATH conflicts with system Slurm tools \
+ && MUNGE_VERSION=$(dpkg -l munge 2>/dev/null | awk '/^ii/{print $3}' | cut -d: -f2 | cut -d- -f1 || echo "0.5.16") \
+ && echo "  munge:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
+ && echo "    externals:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
+ && echo "    - spec: munge@${MUNGE_VERSION}" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
+ && echo "      prefix: /usr" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
+ && echo "    buildable: false" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
+ # Configure openmpi to use Slurm scheduler integration (OpenMPI 5 uses PMIx, not +pmi) \
+ && spack -e . config add 'packages:openmpi:require:[schedulers=slurm]' \
+ # Ensure PMIx includes munge security plugin to avoid psec/munge runtime warnings.
+ # Use require (not just variants preference) so concretization cannot silently pick ~munge. \
+ && spack -e . config add 'packages:pmix:require:[+munge]' \
+ # Normalize target selection so builds on different hosts can share buildcache artifacts. \
+ # Use generic targets (x86_64 / aarch64) for maximum portability at the cost of SIMD optimizations. \
+ && if [ "$(uname -m)" = "x86_64" ]; then \
+      spack -e . config add 'packages:all:target:[x86_64]' ; \
+    elif [ "$(uname -m)" = "aarch64" ]; then \
+      spack -e . config add 'packages:all:target:[aarch64]' ; \
     fi \
+ # Configure lmod modules instead of tcl \
  && sed -i 's/tcl/lmod/g' site/modules.yaml \
- && sed -i 's/tcl/lmod/g' common/modules.yaml \
- && sed -i 's:{^mpi.name}/{^mpi.version}/{compiler.name}/{compiler.version}/{name}:{name}:' common/modules.yaml \
- && sed -i 's:{compiler.name}/{compiler.version}/{name}:{name}:' common/modules.yaml
+ # Use unhashed module names like other spack-stack deployments, with suffix rules to avoid naming clashes \
+ && printf '%s\n' \
+   '      hash_length: 0' \
+   '      all:' \
+   '        suffixes:' \
+   '          +debug: debug' \
+   '          build_type=Debug: debug' \
+   '      esmf:' \
+   '        suffixes:' \
+   '          ~openmp: noopenmp' \
+   '      ip:' \
+   '        suffixes:' \
+   '          ~openmp: noopenmp' \
+   '      neptune-env:' \
+   '        suffixes:' \
+   '          ~openmp: noopenmp' \
+   '      mapl:' \
+   '        suffixes:' \
+   '          ^esmf@8.6.1~debug ~openmp snapshot=none: esmf-8.6.1-noopenmp' \
+   '          ^esmf@8.6.1+debug ~openmp snapshot=none: esmf-8.6.1-debug-noopenmp' \
+   '          ^esmf@8.6.1~debug +openmp snapshot=none: esmf-8.6.1' \
+   '          ^esmf@8.6.1+debug +openmp snapshot=none: esmf-8.6.1-debug' \
+   '          ^esmf@8.8.0~debug ~openmp snapshot=none: esmf-8.8.0-noopenmp' \
+   '          ^esmf@8.8.0+debug ~openmp snapshot=none: esmf-8.8.0-debug-noopenmp' \
+   '          ^esmf@8.8.0~debug +openmp snapshot=none: esmf-8.8.0' \
+   '          ^esmf@8.8.0+debug +openmp snapshot=none: esmf-8.8.0-debug' \
+   '          ^esmf@8.9.1~debug ~openmp snapshot=none: esmf-8.9.1-noopenmp' \
+   '          ^esmf@8.9.1+debug ~openmp snapshot=none: esmf-8.9.1-debug-noopenmp' \
+   '          ^esmf@8.9.1~debug +openmp snapshot=none: esmf-8.9.1' \
+   '          ^esmf@8.9.1+debug +openmp snapshot=none: esmf-8.9.1-debug' \
+   '      fms:' \
+   '        suffixes:' \
+   '          constants=GEOS: geos-constants' \
+   '          constants=GFS: gfs-constants' \
+   >> site/modules.yaml \
+ # Force env module root so final stage can copy a stable path \
+ && spack -e . config add 'modules:default:roots:lmod:$env/modules'
 
-# Concretize the Spack environment
+# Add the build cache mirror and concretize
 RUN cd /opt/spack-stack \
- && . ./setup.sh \
- && cd /opt/spack-stack/envs/unified-env \
+ && source setup.sh \
+ && cd envs/unified-env \
  && spack env activate . \
- && spack concretize 2>&1 | tee log.concretize
+ && spack mirror add --unsigned ghcr_buildcache oci://ghcr.io/noaa-gsl/dockerspackstackslurmcluster/buildcache \
+ && spack concretize > /dev/null 2>&1 \
+ && spack spec openmpi 2>&1 | grep -Eq 'schedulers(:=|=)slurm' \
+ && spack spec pmix 2>&1 | grep -q '+munge'
 
 # Install the Spack environment
-RUN --mount=type=secret,id=access_key_id --mount=type=secret,id=secret_access_key --mount=type=secret,id=session_token <<EOF
-  # Install spack-stack and setup environment
-  cd /opt
-  pushd spack-stack
-  . ./setup.sh
-  pushd envs/unified-env
+RUN --mount=type=secret,id=github_token <<EOF
+  cd /opt/spack-stack
+  source setup.sh
+  cd envs/unified-env
   spack env activate .
 
-  # Add an autopush buildcache mirror if credentials were provided
-  if [ -f /run/secrets/access_key_id ]; then
-    export AWS_ACCESS_KEY_ID=$(cat /run/secrets/access_key_id)
-    export AWS_SECRET_ACCESS_KEY=$(cat /run/secrets/secret_access_key)
-    export AWS_SESSION_TOKEN=$(cat /run/secrets/session_token)
-    spack mirror add --s3-access-key-id $AWS_ACCESS_KEY_ID --s3-access-key-secret $AWS_SECRET_ACCESS_KEY --s3-access-token $AWS_SESSION_TOKEN --autopush --unsigned s3_spack_stack_buildcache_rw s3://chiltepin-us-east-2/spack-stack/
+  # Set parallel build jobs to match CI runner core count
+  spack config add config:build_jobs:${SPACK_BUILD_JOBS}
+
+  # Configure buildcache credentials and autopush if a GitHub token was provided
+  if [ -f /run/secrets/github_token ]; then
+    export GITHUB_TOKEN=$(cat /run/secrets/github_token)
+    spack mirror set --autopush --oci-username x-access-token --oci-password-variable GITHUB_TOKEN ghcr_buildcache
   fi
 
-  # Install the environment, use autopush buildcache if credentials were provided
-  spack install --no-check-signature # 2>&1 | tee log.install
-  if [ -f /run/secrets/access_key_id ]; then  
-    spack buildcache update-index s3_spack_stack_buildcache_rw
+  # Install the environment
+  spack install --no-check-signature 2>&1 | tee log.install
+
+  # Update the build cache index if credentials were provided
+  if [ -f /run/secrets/github_token ]; then
+    spack buildcache update-index ghcr_buildcache
   fi
 EOF
 
 # Create the modulefiles and cleanup
-RUN cd /opt \
- && pushd spack-stack \
- && . ./setup.sh \
- && pushd envs/unified-env \
- && spack env activate . \
+RUN cd /opt/spack-stack \
+ && source setup.sh \
+ && cd envs/unified-env \
  && source /usr/lmod/lmod/init/bash \
- && spack module lmod refresh -y \
- && spack stack setup-meta-modules \
+ && spack -e . module lmod refresh -y --delete-tree \
+ && spack -e . stack setup-meta-modules \
  && spack gc -y \
- && find /opt/spack-stack/envs/unified-env/install/gcc/11.4.0 -name .spack -type d -print0 | xargs -0 rm -rf "{}" \
  && rm -rf ~/.spack
 
-# Copy installed environment into final images
+# Copy installed environment into final image
 FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:latest
+
+# Default Slurm MPI plugin so users do not need to pass --mpi=pmix on every srun.
+ENV SLURM_MPI_TYPE=pmix
 
 COPY --from=builder /usr /usr
 COPY --from=builder /etc /etc
 COPY --from=builder /opt/spack-stack/envs/unified-env/install /opt/spack-stack/envs/unified-env/install
+COPY --from=builder /opt/spack-stack/envs/unified-env/modules /opt/spack-stack/envs/unified-env/modules
