@@ -1,4 +1,9 @@
-FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-node:latest
+# BASE_IMAGE_TAG selects the base image variant (e.g. ubuntu-26.04-slurm-25.11.5 or
+# ubuntu-24.04-slurm-25.11.5). Default matches `latest` in the base registry. When
+# using docker compose this is constructed from UBUNTU_VERSION + SLURM_VERSION in .env;
+# when invoking buildx directly it can be set via --build-arg BASE_IMAGE_TAG=...
+ARG BASE_IMAGE_TAG=ubuntu-26.04-slurm-25.11.5
+FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-node:${BASE_IMAGE_TAG}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
