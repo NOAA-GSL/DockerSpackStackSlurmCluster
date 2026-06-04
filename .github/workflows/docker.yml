@@ -16,32 +16,31 @@ on:
   workflow_dispatch:
 
 env:
+  # Slurm version baked into the base image tag (ubuntu-<UBUNTU>-slurm-<SLURM_VERSION>).
+  # Bump only when the base dockerslurmcluster repo publishes new tags with a different slurm.
+  # NOT embedded in our own published image tags -- consumers care about spack-stack version.
+  SLURM_VERSION: 25.11.5
+  # Spack-stack version. Drives the git checkout branch AND appears in our image tag suffix.
   SPACK_STACK_VERSION: 2.1.0
+  # The ubuntu version that also gets the `latest` alias on our published images.
+  # Matches the dockerslurmcluster registry's `latest`-pointing convention.
+  LATEST_UBUNTU: '26.04'
   REGISTRY_FRONTEND_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-frontend
   REGISTRY_MASTER_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-master
   REGISTRY_NODE_IMAGE: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-node
 
 jobs:
 
-  resolve_versions:
-    name: Resolve Version Tags
-    runs-on: ubuntu-latest
-    outputs:
-      ubuntu_version: ${{ steps.resolve.outputs.ubuntu_version }}
-    steps:
-      -
-        name: Resolve concrete ubuntu:latest version
-        id: resolve
-        run: |
-          UBUNTU_VERSION=$(docker run --rm ubuntu:latest bash -lc '. /etc/os-release && echo "$VERSION_ID"')
-          echo "ubuntu_version=${UBUNTU_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved ubuntu:latest to VERSION_ID=${UBUNTU_VERSION}"
-
   build-test-push-amd64:
+    name: amd64 (ubuntu-${{ matrix.ubuntu }})
     runs-on: ubuntu2204-8c-32g-300ssd
-    needs:
-      - resolve_versions
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: &ubuntu_versions
+          - '24.04'
+          - '26.04'
     permissions:
       packages: write
       contents: read
@@ -76,13 +75,16 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           platforms: linux/amd64
-          tags: ${{ env.REGISTRY_FRONTEND_IMAGE }}:latest
+          tags: ${{ env.REGISTRY_FRONTEND_IMAGE }}:ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
           build-args: |
             SPACK_BUILD_JOBS=8
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+            UBUNTU_VERSION=${{ matrix.ubuntu }}
+            SPACK_STACK_VERSION=${{ env.SPACK_STACK_VERSION }}
           secrets: |
             "github_token=${{ secrets.GITHUB_TOKEN }}"
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache,mode=max
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache,mode=max
           load: true
       -
         name: Build master image
@@ -91,9 +93,11 @@ jobs:
           context: ./master
           file: ./master/Dockerfile
           platforms: linux/amd64
-          tags: ${{ env.REGISTRY_MASTER_IMAGE }}:latest
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache,mode=max
+          tags: ${{ env.REGISTRY_MASTER_IMAGE }}:ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache,mode=max
           load: true
       -
         name: Build node image
@@ -102,12 +106,18 @@ jobs:
           context: ./node
           file: ./node/Dockerfile
           platforms: linux/amd64
-          tags: ${{ env.REGISTRY_NODE_IMAGE }}:latest
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache,mode=max
+          tags: ${{ env.REGISTRY_NODE_IMAGE }}:ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache,mode=max
           load: true
       -
         name: Start containers for testing
+        env:
+          UBUNTU_VERSION: ${{ matrix.ubuntu }}
+          SLURM_VERSION: ${{ env.SLURM_VERSION }}
+          SPACK_STACK_VERSION: ${{ env.SPACK_STACK_VERSION }}
         run: docker compose -f docker-compose-test.yml up --pull never -d
       -
         name: Check cluster logs
@@ -138,6 +148,10 @@ jobs:
       -
         name: Shut down Slurm cluster containers
         if: always()
+        env:
+          UBUNTU_VERSION: ${{ matrix.ubuntu }}
+          SLURM_VERSION: ${{ env.SLURM_VERSION }}
+          SPACK_STACK_VERSION: ${{ env.SPACK_STACK_VERSION }}
         run: docker compose -f docker-compose-test.yml down
       -
         name: Push frontend by digest
@@ -149,9 +163,12 @@ jobs:
           platforms: linux/amd64
           build-args: |
             SPACK_BUILD_JOBS=8
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+            UBUNTU_VERSION=${{ matrix.ubuntu }}
+            SPACK_STACK_VERSION=${{ env.SPACK_STACK_VERSION }}
           secrets: |
             "github_token=${{ secrets.GITHUB_TOKEN }}"
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-amd64:cache
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache
           outputs: type=image,name=${{ env.REGISTRY_FRONTEND_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
         name: Push master by digest
@@ -161,7 +178,9 @@ jobs:
           context: ./master
           file: ./master/Dockerfile
           platforms: linux/amd64
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-amd64:cache
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache
           outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
         name: Push node by digest
@@ -171,7 +190,9 @@ jobs:
           context: ./node
           file: ./node/Dockerfile
           platforms: linux/amd64
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-amd64:cache
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-ubuntu-${{ matrix.ubuntu }}-amd64:cache
           outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
         name: Export digests
@@ -187,7 +208,7 @@ jobs:
         name: Upload frontend digest
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-digests-linux-amd64
+          name: frontend-ubuntu-${{ matrix.ubuntu }}-digests-linux-amd64
           path: /tmp/digests/frontend/*
           if-no-files-found: error
           retention-days: 1
@@ -195,7 +216,7 @@ jobs:
         name: Upload master digest
         uses: actions/upload-artifact@v4
         with:
-          name: master-digests-linux-amd64
+          name: master-ubuntu-${{ matrix.ubuntu }}-digests-linux-amd64
           path: /tmp/digests/master/*
           if-no-files-found: error
           retention-days: 1
@@ -203,7 +224,7 @@ jobs:
         name: Upload node digest
         uses: actions/upload-artifact@v4
         with:
-          name: node-digests-linux-amd64
+          name: node-ubuntu-${{ matrix.ubuntu }}-digests-linux-amd64
           path: /tmp/digests/node/*
           if-no-files-found: error
           retention-days: 1
@@ -216,10 +237,13 @@ jobs:
           limit-access-to-actor: true
 
   build-test-push-arm64:
+    name: arm64 (ubuntu-${{ matrix.ubuntu }})
     runs-on: LinuxARM64-8core-32G-300Gb
-    needs:
-      - resolve_versions
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: *ubuntu_versions
     permissions:
       packages: write
       contents: read
@@ -280,13 +304,16 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           platforms: linux/arm64
-          tags: ${{ env.REGISTRY_FRONTEND_IMAGE }}:latest
+          tags: ${{ env.REGISTRY_FRONTEND_IMAGE }}:ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
           build-args: |
             SPACK_BUILD_JOBS=8
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+            UBUNTU_VERSION=${{ matrix.ubuntu }}
+            SPACK_STACK_VERSION=${{ env.SPACK_STACK_VERSION }}
           secrets: |
             "github_token=${{ secrets.GITHUB_TOKEN }}"
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache,mode=max
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache,mode=max
           load: true
       -
         name: Build master image
@@ -295,9 +322,11 @@ jobs:
           context: ./master
           file: ./master/Dockerfile
           platforms: linux/arm64
-          tags: ${{ env.REGISTRY_MASTER_IMAGE }}:latest
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache,mode=max
+          tags: ${{ env.REGISTRY_MASTER_IMAGE }}:ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache,mode=max
           load: true
       -
         name: Build node image
@@ -306,12 +335,18 @@ jobs:
           context: ./node
           file: ./node/Dockerfile
           platforms: linux/arm64
-          tags: ${{ env.REGISTRY_NODE_IMAGE }}:latest
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache
-          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache,mode=max
+          tags: ${{ env.REGISTRY_NODE_IMAGE }}:ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache
+          cache-to: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache,mode=max
           load: true
       -
         name: Start containers for testing
+        env:
+          UBUNTU_VERSION: ${{ matrix.ubuntu }}
+          SLURM_VERSION: ${{ env.SLURM_VERSION }}
+          SPACK_STACK_VERSION: ${{ env.SPACK_STACK_VERSION }}
         run: docker compose -f docker-compose-test.yml up --pull never -d
       -
         name: Check cluster logs
@@ -342,6 +377,10 @@ jobs:
       -
         name: Shut down Slurm cluster containers
         if: always()
+        env:
+          UBUNTU_VERSION: ${{ matrix.ubuntu }}
+          SLURM_VERSION: ${{ env.SLURM_VERSION }}
+          SPACK_STACK_VERSION: ${{ env.SPACK_STACK_VERSION }}
         run: docker compose -f docker-compose-test.yml down
       -
         name: Push frontend by digest
@@ -353,9 +392,12 @@ jobs:
           platforms: linux/arm64
           build-args: |
             SPACK_BUILD_JOBS=8
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+            UBUNTU_VERSION=${{ matrix.ubuntu }}
+            SPACK_STACK_VERSION=${{ env.SPACK_STACK_VERSION }}
           secrets: |
             "github_token=${{ secrets.GITHUB_TOKEN }}"
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-arm64:cache
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/frontend-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache
           outputs: type=image,name=${{ env.REGISTRY_FRONTEND_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
         name: Push master by digest
@@ -365,7 +407,9 @@ jobs:
           context: ./master
           file: ./master/Dockerfile
           platforms: linux/arm64
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-arm64:cache
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/master-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache
           outputs: type=image,name=${{ env.REGISTRY_MASTER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
         name: Push node by digest
@@ -375,7 +419,9 @@ jobs:
           context: ./node
           file: ./node/Dockerfile
           platforms: linux/arm64
-          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-arm64:cache
+          build-args: |
+            BASE_IMAGE_TAG=ubuntu-${{ matrix.ubuntu }}-slurm-${{ env.SLURM_VERSION }}
+          cache-from: type=registry,ref=ghcr.io/noaa-gsl/dockerspackstackslurmcluster/node-cache-ubuntu-${{ matrix.ubuntu }}-arm64:cache
           outputs: type=image,name=${{ env.REGISTRY_NODE_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
         name: Export digests
@@ -391,7 +437,7 @@ jobs:
         name: Upload frontend digest
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-digests-linux-arm64
+          name: frontend-ubuntu-${{ matrix.ubuntu }}-digests-linux-arm64
           path: /tmp/digests/frontend/*
           if-no-files-found: error
           retention-days: 1
@@ -399,7 +445,7 @@ jobs:
         name: Upload master digest
         uses: actions/upload-artifact@v4
         with:
-          name: master-digests-linux-arm64
+          name: master-ubuntu-${{ matrix.ubuntu }}-digests-linux-arm64
           path: /tmp/digests/master/*
           if-no-files-found: error
           retention-days: 1
@@ -407,7 +453,7 @@ jobs:
         name: Upload node digest
         uses: actions/upload-artifact@v4
         with:
-          name: node-digests-linux-arm64
+          name: node-ubuntu-${{ matrix.ubuntu }}-digests-linux-arm64
           path: /tmp/digests/node/*
           if-no-files-found: error
           retention-days: 1
@@ -420,11 +466,15 @@ jobs:
           limit-access-to-actor: true
 
   merge-frontend:
+    name: Merge frontend (ubuntu-${{ matrix.ubuntu }})
     runs-on: ubuntu-latest
     needs:
       - build-test-push-amd64
       - build-test-push-arm64
-      - resolve_versions
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: *ubuntu_versions
     permissions:
       packages: write
       contents: read
@@ -438,7 +488,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: frontend-digests-*
+          pattern: frontend-ubuntu-${{ matrix.ubuntu }}-digests-*
           merge-multiple: true
       -
         name: Set up Docker Buildx
@@ -450,12 +500,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY_FRONTEND_IMAGE }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=ubuntu-${{ needs.resolve_versions.outputs.ubuntu_version }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+            type=raw,value=ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+            ${{ matrix.ubuntu == env.LATEST_UBUNTU && 'type=raw,value=latest' || '' }}
           flavor: |
-            latest=true
-            prefix=
-            suffix=
+            latest=false
       -
         name: Login to GHCR
         uses: docker/login-action@v3
@@ -476,11 +524,15 @@ jobs:
           docker buildx imagetools inspect ${{ env.REGISTRY_FRONTEND_IMAGE }}:${{ steps.meta.outputs.version }}
 
   merge-master:
+    name: Merge master (ubuntu-${{ matrix.ubuntu }})
     runs-on: ubuntu-latest
     needs:
       - build-test-push-amd64
       - build-test-push-arm64
-      - resolve_versions
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: *ubuntu_versions
     permissions:
       packages: write
       contents: read
@@ -494,7 +546,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: master-digests-*
+          pattern: master-ubuntu-${{ matrix.ubuntu }}-digests-*
           merge-multiple: true
       -
         name: Set up Docker Buildx
@@ -506,12 +558,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY_MASTER_IMAGE }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=ubuntu-${{ needs.resolve_versions.outputs.ubuntu_version }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+            type=raw,value=ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+            ${{ matrix.ubuntu == env.LATEST_UBUNTU && 'type=raw,value=latest' || '' }}
           flavor: |
-            latest=true
-            prefix=
-            suffix=
+            latest=false
       -
         name: Login to GHCR
         uses: docker/login-action@v3
@@ -532,11 +582,15 @@ jobs:
           docker buildx imagetools inspect ${{ env.REGISTRY_MASTER_IMAGE }}:${{ steps.meta.outputs.version }}
 
   merge-node:
+    name: Merge node (ubuntu-${{ matrix.ubuntu }})
     runs-on: ubuntu-latest
     needs:
       - build-test-push-amd64
       - build-test-push-arm64
-      - resolve_versions
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: *ubuntu_versions
     permissions:
       packages: write
       contents: read
@@ -550,7 +604,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: node-digests-*
+          pattern: node-ubuntu-${{ matrix.ubuntu }}-digests-*
           merge-multiple: true
       -
         name: Set up Docker Buildx
@@ -562,12 +616,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY_NODE_IMAGE }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=ubuntu-${{ needs.resolve_versions.outputs.ubuntu_version }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+            type=raw,value=ubuntu-${{ matrix.ubuntu }}-spack-stack-${{ env.SPACK_STACK_VERSION }}
+            ${{ matrix.ubuntu == env.LATEST_UBUNTU && 'type=raw,value=latest' || '' }}
           flavor: |
-            latest=true
-            prefix=
-            suffix=
+            latest=false
       -
         name: Login to GHCR
         uses: docker/login-action@v3
@@ -586,4 +638,3 @@ jobs:
         name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_NODE_IMAGE }}:${{ steps.meta.outputs.version }}
-

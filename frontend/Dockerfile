@@ -1,7 +1,22 @@
-FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:latest AS builder
+# BASE_IMAGE_TAG is the full tag of the base image pulled from the dockerslurmcluster
+# registry (e.g., ubuntu-26.04-slurm-25.11.5). When using docker compose this is
+# constructed from UBUNTU_VERSION + SLURM_VERSION in .env; when invoking buildx
+# directly it can be set via --build-arg BASE_IMAGE_TAG=...
+ARG BASE_IMAGE_TAG=ubuntu-26.04-slurm-25.11.5
+FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:${BASE_IMAGE_TAG} AS builder
 
 # Default to 8 build jobs; override with --build-arg SPACK_BUILD_JOBS=16 for larger runners
 ARG SPACK_BUILD_JOBS=8
+
+# UBUNTU_VERSION and SPACK_STACK_VERSION are needed in subsequent RUN commands -- both
+# for the per-(ubuntu, spack-stack) buildcache mirror URL (so cross-OS / cross-stack
+# cache pollution can't happen) and to drive the spack-stack git clone branch. ARGs
+# declared before the first FROM only cover FROM substitution; declaring stage-scoped
+# ARGs here plus matching ENVs makes them visible to bash inside the RUN heredocs.
+ARG UBUNTU_VERSION=26.04
+ENV UBUNTU_VERSION=${UBUNTU_VERSION}
+ARG SPACK_STACK_VERSION=2.1.0
+ENV SPACK_STACK_VERSION=${SPACK_STACK_VERSION}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
@@ -55,9 +70,79 @@ RUN git clone --recursive https://github.com/TACC/Lmod.git \
  && popd \
  && rm -rf Lmod
 
-# Clone spack-stack 2.1.0
+# Clone spack-stack at the version specified by SPACK_STACK_VERSION. The git tag must
+# match exactly -- bumping the value should be paired with bumping the tag in any
+# downstream consumer paths (e.g., the patch script's "0.5.15 anchor" comment if the
+# new spack-stack ships a different newest munge version).
 RUN cd /opt \
- && git clone -b 2.1.0 --recurse-submodules https://github.com/jcsda/spack-stack.git
+ && git clone -b ${SPACK_STACK_VERSION} --recurse-submodules https://github.com/jcsda/spack-stack.git
+
+# Stage a patch script that will be applied to the env-local munge recipe snapshot below.
+# spack-stack 2.1.0 ships a munge recipe with two limitations we work around:
+#   1. No `executables` / `determine_version` -- so `spack external find` cannot detect
+#      /usr/bin/munge automatically. The patch injects both.
+#   2. Newest known version capped at 0.5.15. If the base image's munge is newer (e.g.
+#      Ubuntu 26.04 ships 0.5.16), the concretizer rejects the auto-detected external as
+#      an unknown version. The patch injects `version("<MUNGE_VERSION>", sha256=<fake>)`
+#      ONLY IF the system version isn't already recipe-known. The fake sha is safe because
+#      `packages:munge:buildable:false` (set below) prevents spack from ever downloading.
+# The script is idempotent on both injections, takes the system MUNGE_VERSION as argv[2],
+# and is a no-op for the version injection on bases whose munge happens to be already known
+# (e.g. 24.04 ships 0.5.15 which the recipe already lists).
+# Remove this whole patch once spack-stack ships a munge recipe that knows the system
+# version and carries detection logic.
+# (Recipe lives in a Python distribution that spack pulls in, not in the spack git source,
+# so the patch is applied to the env's frozen copy at .spack-env/repos/... after env create.)
+RUN cat > /tmp/patch_munge_recipe.py <<'PY'
+"""Patch spack's munge recipe in place to enable system-munge external detection.
+
+Usage: patch_munge_recipe.py <path-to-munge-package.py> <system-munge-version>
+"""
+import re, sys
+p = sys.argv[1]
+munge_version = sys.argv[2]
+src = open(p).read()
+
+# (1) Inject executables + determine_version (idempotent: skip if both already present).
+if 'executables' not in src or 'determine_version' not in src:
+    insert_detection = (
+        '\n    executables = [r"^munge$"]\n'
+        '\n    @classmethod\n'
+        '    def determine_version(cls, exe):\n'
+        '        import subprocess, re as _re\n'
+        '        try:\n'
+        '            out = subprocess.check_output([exe, "-V"], text=True, stderr=subprocess.STDOUT)\n'
+        '            m = _re.search(r"munge-([0-9.]+)", out)\n'
+        '            return m.group(1) if m else None\n'
+        '        except Exception:\n'
+        '            return None\n'
+    )
+    src, n = re.subn(r'(\n    variant\(\n        "localstatedir")', insert_detection + r'\1', src, count=1)
+    if n != 1:
+        raise SystemExit("FAIL: could not locate localstatedir variant for detection-logic injection")
+    print("Injected executables + determine_version into recipe")
+else:
+    print("Recipe already has executables + determine_version; no detection injection needed")
+
+# (2) Inject version(<MUNGE_VERSION>) with placeholder sha if the system version isn't already declared.
+if 'version("' + munge_version + '"' in src:
+    print("Recipe already declares version " + munge_version + "; no version injection needed")
+else:
+    new_version = '    version("' + munge_version + '", sha256="' + '0' * 64 + '")\n'
+    # Anchor before the highest known version in the recipe (currently 0.5.15 in spack-stack 2.1.0).
+    src, n = re.subn(
+        r'(    version\("0\.5\.15", sha256="[a-f0-9]+"\)\n)',
+        new_version + r'\1',
+        src,
+        count=1,
+    )
+    if n != 1:
+        raise SystemExit("FAIL: could not locate version 0.5.15 anchor for version injection")
+    print("Injected version(" + repr(munge_version) + ") into recipe")
+
+open(p, 'w').write(src)
+print("Patched munge recipe at " + p)
+PY
 
 # Create and configure the unified env using the container site
 RUN cd /opt/spack-stack \
@@ -65,6 +150,34 @@ RUN cd /opt/spack-stack \
  && spack stack create env --site container --template unified-dev --name unified-env --compiler gcc \
  && cd envs/unified-env \
  && spack env activate . \
+ # Detect the system munge version once, up-front, so the recipe patch and the \
+ # `packages:munge:require:[@VERSION]` config_add below can both reference it. \
+ && MUNGE_VERSION=$(/usr/bin/munge -V 2>&1 | head -1 | sed -n 's/^munge-\([0-9.]\+\).*/\1/p') \
+ && [ -n "$MUNGE_VERSION" ] || { \
+        echo "ERROR: could not parse munge version from /usr/bin/munge -V output:"; \
+        /usr/bin/munge -V 2>&1; \
+        exit 1; \
+    } \
+ && echo "Detected system munge version: $MUNGE_VERSION" \
+ # Apply the munge recipe patch to the *source* recipe, before any external find / concretize \
+ # runs (which is what triggers spack to lazily snapshot the recipe into .spack-env/repos/...). \
+ # Ask spack itself for the recipe path -- robust to whether packages live in the spack git \
+ # submodule, a pip-installed spack_repo distribution, or somewhere else entirely. \
+ && MUNGE_PY=$(spack python -c "import spack.repo; print(spack.repo.PATH.get_pkg_class('munge').module.__file__)") \
+ && [ -n "$MUNGE_PY" ] && [ -f "$MUNGE_PY" ] || { \
+        echo "ERROR: spack could not locate munge/package.py (got: '$MUNGE_PY')"; \
+        echo "Diagnostic find under /opt:"; \
+        find /opt -path "*/packages/munge/package.py" 2>/dev/null; \
+        exit 1; \
+    } \
+ && python3 /tmp/patch_munge_recipe.py "$MUNGE_PY" "$MUNGE_VERSION" \
+ # Nuke any bytecode cache near the patched recipe so the next spack import re-compiles \
+ # against the new source. Necessary because earlier spack commands in this RUN may have \
+ # already imported and cached the unpatched recipe, and Python's mtime-based pyc validation \
+ # can be unreliable on Docker overlayfs. \
+ && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
+ && echo "Munge recipe patch verification (looking for version $MUNGE_VERSION + detection logic):" \
+ && grep -nE "version\(\"${MUNGE_VERSION//./\\.}\"|executables = |def determine_version" "$MUNGE_PY" \
  # Fix system external versions for Ubuntu 26.04 \
  && spack external find --scope "env:/opt/spack-stack/envs/unified-env:/opt/spack-stack/envs/unified-env/site" \
     --exclude cmake \
@@ -73,32 +186,38 @@ RUN cd /opt/spack-stack \
     --exclude openssh \
     --exclude python \
  && spack external find --scope "env:/opt/spack-stack/envs/unified-env:/opt/spack-stack/envs/unified-env/site" wget \
+ # Explicit munge detection. The bulk find above scans many packages at once and (as observed) \
+ # sometimes fails to pick up newly-patched recipes; an explicit single-package find reliably \
+ # uses the patched recipe. Writes to the env scope (spack.yaml), where our `buildable: false` \
+ # config_add further below also lands -- both get merged at concretize time. \
+ && spack external find munge \
  # Add slurm as an external package \
  && echo "  slurm:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    externals:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    - spec: slurm@25.11.5" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "      prefix: /usr" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    buildable: false" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- # Add munge as an external package so spack uses the system munge (same one munged starts at boot) \
- # rather than building its own, which would cause LD_LIBRARY_PATH conflicts with system Slurm tools \
- && MUNGE_VERSION=$(dpkg -l munge 2>/dev/null | awk '/^ii/{print $3}' | cut -d: -f2 | cut -d- -f1 || echo "0.5.16") \
- && echo "  munge:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- && echo "    externals:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- && echo "    - spec: munge@${MUNGE_VERSION}" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- && echo "      prefix: /usr" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- && echo "    buildable: false" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
+ # Forbid building munge so the concretizer must use the system munge that the bulk \
+ # `spack external find` above auto-detected via the patched recipe. (Auto-detection writes \
+ # the external entry to packages.yaml but does not set buildable:false on its own.) \
+ && spack -e . config add 'packages:munge:buildable:false' \
+ # Force the concretizer to pin munge at the system version. Without this require, the \
+ # solver's version-badness scoring downranks our patched version (placeholder sha = "less \
+ # buildable") in favor of a recipe-default version with a real sha, and picks build over \
+ # external -- even though buildable:false is set and our auto-detected external is the only \
+ # valid candidate at the system version. The require overrides the version score and forces \
+ # the only feasible solution. MUNGE_VERSION is the value detected above. \
+ && spack -e . config add "packages:munge:require:[\"@${MUNGE_VERSION}\"]" \
  # Configure openmpi to use Slurm scheduler integration (OpenMPI 5 uses PMIx, not +pmi) \
  && spack -e . config add 'packages:openmpi:require:[schedulers=slurm]' \
  # Ensure PMIx includes munge security plugin to avoid psec/munge runtime warnings.
  # Use require (not just variants preference) so concretization cannot silently pick ~munge. \
  && spack -e . config add 'packages:pmix:require:[+munge]' \
- # Normalize target selection so builds on different hosts can share buildcache artifacts. \
- # Use generic targets (x86_64 / aarch64) for maximum portability at the cost of SIMD optimizations. \
- && if [ "$(uname -m)" = "x86_64" ]; then \
-      spack -e . config add 'packages:all:target:[x86_64]' ; \
-    elif [ "$(uname -m)" = "aarch64" ]; then \
-      spack -e . config add 'packages:all:target:[aarch64]' ; \
-    fi \
+ # Use the spack-stack site default target (x86_64_v3 on x86_64 hosts). \
+ # Earlier this block added `target:[x86_64]` for buildcache portability, but spack merged \
+ # that with the site default to `[x86_64, x86_64_v3]`, and the concretizer's choice between \
+ # them caused manually-declared externals (notably munge) to be rejected on target mismatch. \
+ # x86_64_v3 covers Haswell and newer, which is fine for our build/run hardware. \
  # Configure lmod modules instead of tcl \
  && sed -i 's/tcl/lmod/g' site/modules.yaml \
  # Use unhashed module names like other spack-stack deployments, with suffix rules to avoid naming clashes \
@@ -139,15 +258,76 @@ RUN cd /opt/spack-stack \
  # Force env module root so final stage can copy a stable path \
  && spack -e . config add 'modules:default:roots:lmod:$env/modules'
 
-# Add the build cache mirror and concretize
-RUN cd /opt/spack-stack \
- && source setup.sh \
- && cd envs/unified-env \
- && spack env activate . \
- && spack mirror add --unsigned ghcr_buildcache oci://ghcr.io/noaa-gsl/dockerspackstackslurmcluster/buildcache \
- && spack concretize > /dev/null 2>&1 \
- && spack spec openmpi 2>&1 | grep -Eq 'schedulers(:=|=)slurm' \
- && spack spec pmix 2>&1 | grep -q '+munge'
+# Register the per-(ubuntu, spack-stack) buildcache mirror, concretize the env, and
+# verify that the four load-bearing configuration choices took effect (munge / slurm
+# externals, pmix +munge, openmpi schedulers=slurm). Verification is non-fatal so a
+# regression here surfaces as a visible FAIL line in the build log without breaking
+# the build outright -- inspect the resulting image with `docker run --entrypoint
+# bash` and `spack spec <pkg>` to dig in if anything ever fails here.
+RUN <<'EOF'
+  set -eo pipefail
+  cd /opt/spack-stack
+  source setup.sh
+  cd envs/unified-env
+  spack env activate .
+  # Per-(ubuntu, spack-stack) buildcache repo. Splitting by ubuntu prevents cross-OS spec
+  # contamination -- spack's reuse:true scoring would otherwise pull e.g. 26.04-built
+  # gcc-runtime into a 24.04 concretization, producing a split-brain env with duplicate
+  # same-package specs at different OSes that crash module generation. Splitting by
+  # spack-stack version isolates recipe-change deltas between releases (different recipes
+  # produce different package hashes). Slurm version is NOT in the cache name because
+  # slurm is external and doesn't affect spec hashes. GHCR will auto-create the repo on
+  # first push (private by default; set visibility from the GHCR UI separately if you
+  # want to share read access).
+  spack mirror add --unsigned ghcr_buildcache "oci://ghcr.io/noaa-gsl/dockerspackstackslurmcluster/buildcache-ubuntu-${UBUNTU_VERSION}-spack-stack-${SPACK_STACK_VERSION}"
+
+  spack concretize
+
+  # Helpers parse `spack spec --json` and look only at the top-level node, so external
+  # deps (e.g. openssl) don't produce false positives in the is_external check.
+  is_external() {
+    python3 -c '
+import json, subprocess, sys
+out = subprocess.check_output(["spack", "spec", "--json", sys.argv[1]],
+                              text=True, stderr=subprocess.DEVNULL)
+n = json.loads(out)["spec"]["nodes"][0]
+ext = n.get("external_path")
+if not ext:
+    e = n.get("external")
+    if isinstance(e, dict):
+        ext = e.get("path")
+sys.exit(0 if ext else 1)
+' "$1"
+  }
+  has_variant() {
+    # has_variant <package> <variant>     variant forms: +foo  ~foo  key=val
+    python3 -c '
+import json, subprocess, sys
+out = subprocess.check_output(["spack", "spec", "--json", sys.argv[1]],
+                              text=True, stderr=subprocess.DEVNULL)
+n = json.loads(out)["spec"]["nodes"][0]
+params = n.get("parameters", {})
+spec = sys.argv[2]
+if spec.startswith("+"):
+    sys.exit(0 if params.get(spec[1:]) is True else 1)
+if spec.startswith("~"):
+    sys.exit(0 if params.get(spec[1:]) is False else 1)
+if "=" in spec:
+    k, v = spec.split("=", 1)
+    val = params.get(k)
+    if isinstance(val, list):
+        sys.exit(0 if v in val else 1)
+    sys.exit(0 if val == v else 1)
+sys.exit(2)
+' "$1" "$2"
+  }
+
+  echo "===== Verification summary ====="
+  if is_external munge;   then echo "PASS: munge is external";   else echo "FAIL: munge is NOT external"; fi
+  if is_external slurm;   then echo "PASS: slurm is external";   else echo "FAIL: slurm is NOT external"; fi
+  if has_variant pmix +munge; then echo "PASS: pmix has +munge variant"; else echo "FAIL: pmix does NOT have +munge variant"; fi
+  if has_variant openmpi schedulers=slurm; then echo "PASS: openmpi has schedulers=slurm"; else echo "FAIL: openmpi does NOT have schedulers=slurm"; fi
+EOF
 
 # Install the Spack environment
 RUN --mount=type=secret,id=github_token <<EOF
@@ -160,7 +340,7 @@ RUN --mount=type=secret,id=github_token <<EOF
   spack config add config:build_jobs:${SPACK_BUILD_JOBS}
 
   # Configure buildcache credentials and autopush if a GitHub token was provided
-  if [ -f /run/secrets/github_token ]; then
+  if [ -s /run/secrets/github_token ]; then
     export GITHUB_TOKEN=$(cat /run/secrets/github_token)
     spack mirror set --autopush --oci-username x-access-token --oci-password-variable GITHUB_TOKEN ghcr_buildcache
   fi
@@ -168,9 +348,32 @@ RUN --mount=type=secret,id=github_token <<EOF
   # Install the environment
   spack install --no-check-signature 2>&1 | tee log.install
 
-  # Update the build cache index if credentials were provided
-  if [ -f /run/secrets/github_token ]; then
-    spack buildcache update-index ghcr_buildcache
+  # Update the build cache index if credentials were provided.
+  # update-index makes many blob fetches against GHCR to rebuild the index, and we've
+  # observed transient SSL / connection-timeout failures on slow or congested links.
+  # Per-package artifacts are already published via the autopush mirror setting above,
+  # so the buildcache contents are populated regardless of whether the index refreshes.
+  # That makes index refresh best-effort: retry a few times, then warn and move on
+  # rather than failing the entire build (which would discard hours of install work).
+  # A stale index can be refreshed later from any container with GHCR credentials via
+  # `spack buildcache update-index ghcr_buildcache`.
+  if [ -s /run/secrets/github_token ]; then
+    INDEX_OK=0
+    for i in 1 2 3 4 5; do
+      if spack buildcache update-index ghcr_buildcache; then
+        INDEX_OK=1
+        echo "buildcache update-index succeeded on attempt \$i"
+        break
+      fi
+      echo "buildcache update-index attempt $i failed, sleeping 30s before retry..."
+      sleep 30
+    done
+    if [ "$INDEX_OK" -ne 1 ]; then
+      echo "WARN: buildcache update-index failed after 5 attempts."
+      echo "WARN: per-package artifacts ARE in the buildcache via autopush, but the"
+      echo "WARN: index is stale until 'spack buildcache update-index ghcr_buildcache'"
+      echo "WARN: is run successfully from a container with credentials."
+    fi
   fi
 EOF
 
@@ -185,7 +388,7 @@ RUN cd /opt/spack-stack \
  && rm -rf ~/.spack
 
 # Copy installed environment into final image
-FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:latest
+FROM ghcr.io/noaa-gsl/dockerslurmcluster/slurm-frontend:${BASE_IMAGE_TAG}
 
 # Default Slurm MPI plugin so users do not need to pass --mpi=pmix on every srun.
 ENV SLURM_MPI_TYPE=pmix
