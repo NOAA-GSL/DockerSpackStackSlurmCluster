@@ -78,19 +78,31 @@ RUN cd /opt \
  && git clone -b ${SPACK_STACK_VERSION} --recurse-submodules https://github.com/jcsda/spack-stack.git
 
 # Stage a patch script that will be applied to the env-local munge recipe snapshot below.
-# spack-stack 2.1.0 ships a munge recipe with two limitations we work around:
+# spack-stack 2.1.0's bundled spack submodule predates two upstream changes we'd need:
 #   1. No `executables` / `determine_version` -- so `spack external find` cannot detect
 #      /usr/bin/munge automatically. The patch injects both.
-#   2. Newest known version capped at 0.5.15. If the base image's munge is newer (e.g.
-#      Ubuntu 26.04 ships 0.5.16), the concretizer rejects the auto-detected external as
-#      an unknown version. The patch injects `version("<MUNGE_VERSION>", sha256=<fake>)`
-#      ONLY IF the system version isn't already recipe-known. The fake sha is safe because
-#      `packages:munge:buildable:false` (set below) prevents spack from ever downloading.
-# The script is idempotent on both injections, takes the system MUNGE_VERSION as argv[2],
-# and is a no-op for the version injection on bases whose munge happens to be already known
-# (e.g. 24.04 ships 0.5.15 which the recipe already lists).
-# Remove this whole patch once spack-stack ships a munge recipe that knows the system
-# version and carries detection logic.
+#   2. Newest known version capped at 0.5.15. The recipe deliberately skips 0.5.16 and
+#      0.5.17 because both contain a known high-severity CVE; the fix landed in 0.5.18
+#      which a newer spack recipe knows about but our pinned submodule does not. Our
+#      base images install patched munge >= 0.5.18 on the OS, so the auto-detected
+#      external version isn't recipe-known and the concretizer would reject it. The
+#      patch injects `version("<MUNGE_VERSION>", sha256=<fake>)` ONLY IF the system
+#      version isn't already recipe-known. The fake sha is safe because
+#      `packages:munge:buildable:false` (set below) prevents spack from ever
+#      downloading or building this version.
+# The script is idempotent on both injections and takes the system MUNGE_VERSION as
+# argv[2], so it correctly no-ops the version injection on any future base whose munge
+# happens to already be recipe-known.
+#
+# REMOVE WHEN: spack-stack bumps to a release whose bundled spack ships both
+# (a) munge >= 0.5.18 in the recipe AND (b) executables/determine_version detection.
+# At that point delete this RUN, the recipe-patching steps in the env-setup RUN below
+# (the spack python lookup, the python3 invocation, the __pycache__ purge, the
+# verification grep), and the `packages:munge:require:["@${MUNGE_VERSION}"]` config_add
+# -- the plain `spack external find munge` + `config add buildable:false` pair will
+# suffice. The MUNGE_VERSION detection from /usr/bin/munge -V will no longer be needed
+# (only the require constraint uses it; auto-detect handles version on its own).
+#
 # (Recipe lives in a Python distribution that spack pulls in, not in the spack git source,
 # so the patch is applied to the env's frozen copy at .spack-env/repos/... after env create.)
 RUN cat > /tmp/patch_munge_recipe.py <<'PY'
@@ -208,8 +220,14 @@ RUN cd /opt/spack-stack \
  # valid candidate at the system version. The require overrides the version score and forces \
  # the only feasible solution. MUNGE_VERSION is the value detected above. \
  && spack -e . config add "packages:munge:require:[\"@${MUNGE_VERSION}\"]" \
- # Configure openmpi to use Slurm scheduler integration (OpenMPI 5 uses PMIx, not +pmi) \
- && spack -e . config add 'packages:openmpi:require:[schedulers=slurm]' \
+ # Configure openmpi to use Slurm scheduler integration (OpenMPI 5 uses PMIx, not +pmi). \
+ # `~internal-pmix` forces openmpi to use the external spack pmix package instead of its \
+ # bundled copy. The bundled copy's munge linkage happens at openmpi's autotools configure \
+ # time and isn't visible to spack -- so without this constraint, whether munge is actually \
+ # wired up depends on opaque base-image detection and could silently change between \
+ # concretizer runs. With ~internal-pmix the external pmix is built explicitly, and the \
+ # `packages:pmix:require:[+munge]` config_add below guarantees its munge support. \
+ && spack -e . config add 'packages:openmpi:require:[schedulers=slurm, ~internal-pmix]' \
  # Ensure PMIx includes munge security plugin to avoid psec/munge runtime warnings.
  # Use require (not just variants preference) so concretization cannot silently pick ~munge. \
  && spack -e . config add 'packages:pmix:require:[+munge]' \
@@ -331,6 +349,12 @@ EOF
 
 # Install the Spack environment
 RUN --mount=type=secret,id=github_token <<EOF
+  # `set -eo pipefail` ensures spack install failures (or any other step) fail the build
+  # loudly. Without these, `spack install | tee log.install` returns tee's exit status
+  # (always 0), silently masking partial install failures and producing a "successful"
+  # image with missing packages -- which is exactly the trap we fell into before adding
+  # these flags. update-index retry below still uses its own non-fatal handling.
+  set -eo pipefail
   cd /opt/spack-stack
   source setup.sh
   cd envs/unified-env
