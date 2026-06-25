@@ -107,12 +107,9 @@ else:
         '\\n    executables = [r"^munge\$"]\\n'
         '\\n    @classmethod\\n'
         '    def determine_version(cls, exe):\\n'
-        '        try:\\n'
-        '            output = Executable(exe)("-V", output=str, error=str)\\n'
-        '            match = re.search(r"munge-([0-9.]+)", output)\\n'
-        '            return match.group(1) if match else None\\n'
-        '        except Exception:\\n'
-        '            return None\\n'
+        '        output = Executable(exe)("-V", output=str).rstrip()\\n'
+        '        match = re.search(r"munge-([0-9.]+)", output)\\n'
+        '        return match.group(1) if match else None\\n'
     )
     src, n = re.subn(r'(\\n    variant\\(\\n        "localstatedir")', insert + r'\\1', src, count=1)
     if n != 1:
