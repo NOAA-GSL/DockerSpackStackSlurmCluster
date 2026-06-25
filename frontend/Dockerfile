@@ -74,49 +74,53 @@ RUN git clone --recursive https://github.com/TACC/Lmod.git \
 RUN cd /opt \
  && git clone -b ${SPACK_STACK_VERSION} --recurse-submodules https://github.com/jcsda/spack-stack.git
 
-# Fetch the upstream munge recipe from spack-packages, which includes munge 0.5.18
-# and CVE patches that spack-stack 2.1.0's bundled recipe lacks. We'll use this
-# to replace the bundled recipe, then patch in executables/determine_version for
-# auto-detection since upstream doesn't have that yet either.
-RUN curl -fsSL "https://raw.githubusercontent.com/spack/spack-packages/develop/repos/spack_repo/builtin/packages/munge/package.py" \
-     -o /tmp/munge_upstream_package.py
+# Replace the bundled munge recipe with upstream version BEFORE any spack env commands.
+# This ensures spack never imports the old recipe. Fetch upstream recipe (has 0.5.18 + CVE
+# patches), replace the bundled one, then patch in executables/determine_version for auto-detection.
+RUN cd /opt/spack-stack \
+ && source setup.sh \
+ # Locate the bundled munge recipe. \
+ && MUNGE_PY=$(spack python -c "import spack.repo; print(spack.repo.PATH.get_pkg_class('munge').module.__file__)") \
+ && [ -n "$MUNGE_PY" ] && [ -f "$MUNGE_PY" ] || { \
+        echo "ERROR: spack could not locate munge/package.py"; \
+        exit 1; \
+    } \
+ && echo "Found bundled munge recipe at: $MUNGE_PY" \
+ # Fetch and replace with upstream recipe. \
+ && curl -fsSL "https://raw.githubusercontent.com/spack/spack-packages/develop/repos/spack_repo/builtin/packages/munge/package.py" \
+     -o "$MUNGE_PY" \
+ && echo "Replaced with upstream recipe" \
+ # Patch in executables + determine_version using Spack idioms (inline Python avoids temp files). \
+ && python3 <<PATCH
+import re
+p = "${MUNGE_PY}"
+with open(p) as f:
+    src = f.read()
 
-# Create a minimal patch script that injects only executables + determine_version.
-# Uses Spack's Executable utility (idiomatic) instead of subprocess (non-idiomatic).
-# This is much simpler than the old approach since the upstream recipe already has
-# version 0.5.18, so we don't need version injection, fake SHA256s, or require constraints.
-RUN cat > /tmp/patch_munge_recipe.py <<'PY'
-"""Add executables and determine_version to munge recipe for auto-detection.
-
-Usage: patch_munge_recipe.py <path-to-munge-package.py>
-"""
-import re, sys
-p = sys.argv[1]
-src = open(p).read()
-
-# Inject executables + determine_version if not already present (idempotent).
 if 'executables' in src and 'determine_version' in src:
-    print("Recipe already has executables + determine_version; no injection needed")
-    sys.exit(0)
-
-insert_detection = (
-    '\n    executables = [r"^munge$"]\n'
-    '\n    @classmethod\n'
-    '    def determine_version(cls, exe):\n'
-    '        try:\n'
-    '            output = Executable(exe)("-V", output=str, error=str)\n'
-    '            match = re.search(r"munge-([0-9.]+)", output)\n'
-    '            return match.group(1) if match else None\n'
-    '        except Exception:\n'
-    '            return None\n'
-)
-src, n = re.subn(r'(\n    variant\(\n        "localstatedir")', insert_detection + r'\1', src, count=1)
-if n != 1:
-    raise SystemExit("FAIL: could not locate localstatedir variant for injection")
-
-open(p, 'w').write(src)
-print("Injected executables + determine_version into recipe")
-PY
+    print("Recipe already has executables + determine_version")
+else:
+    insert = (
+        '\\n    executables = [r"^munge\$"]\\n'
+        '\\n    @classmethod\\n'
+        '    def determine_version(cls, exe):\\n'
+        '        try:\\n'
+        '            output = Executable(exe)("-V", output=str, error=str)\\n'
+        '            match = re.search(r"munge-([0-9.]+)", output)\\n'
+        '            return match.group(1) if match else None\\n'
+        '        except Exception:\\n'
+        '            return None\\n'
+    )
+    src, n = re.subn(r'(\\n    variant\\(\\n        "localstatedir")', insert + r'\\1', src, count=1)
+    if n != 1:
+        raise SystemExit("FAIL: could not locate variant for injection")
+    with open(p, 'w') as f:
+        f.write(src)
+    print("Injected executables + determine_version")
+PATCH
+ # Clear any bytecode cache. \
+ && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
+ && echo "Munge recipe updated successfully"
 
 # Create and configure the unified env using the container site
 RUN cd /opt/spack-stack \
@@ -124,22 +128,6 @@ RUN cd /opt/spack-stack \
  && spack stack create env --site container --template unified-dev --name unified-env --compiler gcc \
  && cd envs/unified-env \
  && spack env activate . \
- # Replace the bundled munge recipe with the upstream version that has 0.5.18 + CVE patches. \
- # Ask spack for the recipe path (robust to package location changes across spack versions). \
- && MUNGE_PY=$(spack python -c "import spack.repo; print(spack.repo.PATH.get_pkg_class('munge').module.__file__)") \
- && [ -n "$MUNGE_PY" ] && [ -f "$MUNGE_PY" ] || { \
-        echo "ERROR: spack could not locate munge/package.py (got: '$MUNGE_PY')"; \
-        echo "Diagnostic find under /opt:"; \
-        find /opt -path "*/packages/munge/package.py" 2>/dev/null; \
-        exit 1; \
-    } \
- && cp /tmp/munge_upstream_package.py "$MUNGE_PY" \
- && echo "Replaced bundled munge recipe with upstream version" \
- # Apply the minimal patch to add executables + determine_version for auto-detection. \
- && python3 /tmp/patch_munge_recipe.py "$MUNGE_PY" \
- # Clear bytecode cache so spack re-imports the modified recipe. Python's mtime-based \
- # pyc validation can be unreliable on Docker overlayfs. \
- && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
  # Fix system external versions for Ubuntu 26.04 \
  && spack external find --scope "env:/opt/spack-stack/envs/unified-env:/opt/spack-stack/envs/unified-env/site" \
     --exclude cmake \
