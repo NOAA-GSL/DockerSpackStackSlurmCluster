@@ -117,7 +117,7 @@ else:
     with open(p, 'w') as f:
         f.write(src)
     print("Injected executables + determine_version")
-PATCH
+PATCH \
  # Clear any bytecode cache. \
  && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
  && echo "Munge recipe updated successfully"
