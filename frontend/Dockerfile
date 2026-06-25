@@ -141,9 +141,11 @@ RUN cd /opt/spack-stack \
  && spack python -c "import spack.repo; pkg = spack.repo.PATH.get_pkg_class('munge'); print('executables:', hasattr(pkg, 'executables')); print('determine_version:', hasattr(pkg, 'determine_version'))" \
  && echo "===== Attempting to detect system munge =====" \
  && /usr/bin/munge -V || echo "WARNING: munge command not found or failed" \
+ && echo "===== Testing munge detection directly =====" \
+ && spack python -c "import spack.repo; pkg_cls = spack.repo.PATH.get_pkg_class('munge'); print('Executables:', getattr(pkg_cls, 'executables', None)); import os; print('Munge at /usr/bin/munge:', os.path.exists('/usr/bin/munge')); print('Version detection:', pkg_cls.determine_version('/usr/bin/munge') if os.path.exists('/usr/bin/munge') else 'N/A')" \
  && spack external find munge \
- && echo "===== Checking if munge external was found =====" \
- && spack config get packages:munge || echo "No munge config found" \
+ && echo "===== Checking spack.yaml for munge external =====" \
+ && grep -A 5 "munge:" spack.yaml || echo "No munge entry found in spack.yaml" \
  # Add slurm as an external package \
  && echo "  slurm:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    externals:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
