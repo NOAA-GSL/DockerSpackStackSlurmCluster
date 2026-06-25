@@ -90,7 +90,9 @@ RUN cd /opt/spack-stack \
  && curl -fsSL "https://raw.githubusercontent.com/spack/spack-packages/develop/repos/spack_repo/builtin/packages/munge/package.py" \
      -o "$MUNGE_PY" \
  && echo "Replaced with upstream recipe" \
- # Patch in executables + determine_version using Spack idioms (inline Python avoids temp files). \
+ # Clear any bytecode cache before patching so spack re-imports the modified recipe. \
+ && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
+ # Patch in executables + determine_version using Spack idioms. \
  && python3 <<PATCH
 import re
 p = "${MUNGE_PY}"
@@ -117,10 +119,7 @@ else:
     with open(p, 'w') as f:
         f.write(src)
     print("Injected executables + determine_version")
-PATCH \
- # Clear any bytecode cache. \
- && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
- && echo "Munge recipe updated successfully"
+PATCH
 
 # Create and configure the unified env using the container site
 RUN cd /opt/spack-stack \
