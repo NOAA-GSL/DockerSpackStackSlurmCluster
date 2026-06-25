@@ -74,26 +74,27 @@ RUN git clone --recursive https://github.com/TACC/Lmod.git \
 RUN cd /opt \
  && git clone -b ${SPACK_STACK_VERSION} --recurse-submodules https://github.com/jcsda/spack-stack.git
 
-# Replace the bundled munge recipe with upstream version BEFORE any spack env commands.
-# This ensures spack never imports the old recipe. Fetch upstream recipe (has 0.5.18 + CVE
-# patches), replace the bundled one, then patch in executables/determine_version for auto-detection.
+# Create and configure the unified env using the container site
 RUN cd /opt/spack-stack \
  && source setup.sh \
- # Locate the bundled munge recipe. \
+ && spack stack create env --site container --template unified-dev --name unified-env --compiler gcc \
+ && cd envs/unified-env \
+ && spack env activate . \
+ # Replace the bundled munge recipe with upstream version (has 0.5.18 + CVE patches). \
+ # Must happen AFTER env create because environments snapshot recipes into their own repos. \
  && MUNGE_PY=$(spack python -c "import spack.repo; print(spack.repo.PATH.get_pkg_class('munge').module.__file__)") \
  && [ -n "$MUNGE_PY" ] && [ -f "$MUNGE_PY" ] || { \
         echo "ERROR: spack could not locate munge/package.py"; \
         exit 1; \
     } \
- && echo "Found bundled munge recipe at: $MUNGE_PY" \
- # Fetch and replace with upstream recipe. \
+ && echo "Found munge recipe at: $MUNGE_PY" \
  && curl -fsSL "https://raw.githubusercontent.com/spack/spack-packages/develop/repos/spack_repo/builtin/packages/munge/package.py" \
      -o "$MUNGE_PY" \
  && echo "Replaced with upstream recipe" \
- # Clear any bytecode cache before patching so spack re-imports the modified recipe. \
+ # Clear bytecode cache so spack re-imports the modified recipe. \
  && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
  # Patch in executables + determine_version using Spack idioms. \
- && python3 <<PATCH
+ && python3 <<'PATCH'
 import re
 p = "${MUNGE_PY}"
 with open(p) as f:
@@ -103,17 +104,17 @@ if 'executables' in src and 'determine_version' in src:
     print("Recipe already has executables + determine_version")
 else:
     insert = (
-        '\\n    executables = [r"^munge\$"]\\n'
-        '\\n    @classmethod\\n'
-        '    def determine_version(cls, exe):\\n'
-        '        try:\\n'
-        '            output = Executable(exe)("-V", output=str, error=str)\\n'
-        '            match = re.search(r"munge-([0-9.]+)", output)\\n'
-        '            return match.group(1) if match else None\\n'
-        '        except Exception:\\n'
-        '            return None\\n'
+        '\n    executables = [r"^munge$"]\n'
+        '\n    @classmethod\n'
+        '    def determine_version(cls, exe):\n'
+        '        try:\n'
+        '            output = Executable(exe)("-V", output=str, error=str)\n'
+        '            match = re.search(r"munge-([0-9.]+)", output)\n'
+        '            return match.group(1) if match else None\n'
+        '        except Exception:\n'
+        '            return None\n'
     )
-    src, n = re.subn(r'(\\n    variant\\(\\n        "localstatedir")', insert + r'\\1', src, count=1)
+    src, n = re.subn(r'(\n    variant\(\n        "localstatedir")', insert + r'\1', src, count=1)
     if n != 1:
         raise SystemExit("FAIL: could not locate variant for injection")
     with open(p, 'w') as f:
@@ -121,13 +122,10 @@ else:
     print("Injected executables + determine_version")
 PATCH
 
-# Create and configure the unified env using the container site
 RUN cd /opt/spack-stack \
  && source setup.sh \
- && spack stack create env --site container --template unified-dev --name unified-env --compiler gcc \
  && cd envs/unified-env \
  && spack env activate . \
- # Fix system external versions for Ubuntu 26.04 \
  && spack external find --scope "env:/opt/spack-stack/envs/unified-env:/opt/spack-stack/envs/unified-env/site" \
     --exclude cmake \
     --exclude curl \
@@ -139,7 +137,13 @@ RUN cd /opt/spack-stack \
  # sometimes fails to pick up newly-patched recipes; an explicit single-package find reliably \
  # uses the patched recipe. Writes to the env scope (spack.yaml), where our `buildable: false` \
  # config_add further below also lands -- both get merged at concretize time. \
+ && echo "===== Verifying munge recipe has detection support =====" \
+ && spack python -c "import spack.repo; pkg = spack.repo.PATH.get_pkg_class('munge'); print('executables:', hasattr(pkg, 'executables')); print('determine_version:', hasattr(pkg, 'determine_version'))" \
+ && echo "===== Attempting to detect system munge =====" \
+ && /usr/bin/munge -V || echo "WARNING: munge command not found or failed" \
  && spack external find munge \
+ && echo "===== Checking if munge external was found =====" \
+ && spack config get packages:munge || echo "No munge config found" \
  # Add slurm as an external package \
  && echo "  slurm:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    externals:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
