@@ -107,6 +107,7 @@ else:
         '\\n    executables = [r"^munge\$"]\\n'
         '\\n    @classmethod\\n'
         '    def determine_version(cls, exe):\\n'
+        '        import re\\n'
         '        output = Executable(exe)("-V", output=str).rstrip()\\n'
         '        match = re.search(r"munge-([0-9.]+)", output)\\n'
         '        return match.group(1) if match else None\\n'
