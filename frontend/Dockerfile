@@ -94,7 +94,7 @@ RUN cd /opt/spack-stack \
  # Clear bytecode cache so spack re-imports the modified recipe. \
  && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
  # Patch in executables + determine_version using Spack idioms. \
- && python3 <<'PATCH'
+ && python3 <<PATCH
 import re
 p = "${MUNGE_PY}"
 with open(p) as f:
@@ -104,17 +104,17 @@ if 'executables' in src and 'determine_version' in src:
     print("Recipe already has executables + determine_version")
 else:
     insert = (
-        '\n    executables = [r"^munge$"]\n'
-        '\n    @classmethod\n'
-        '    def determine_version(cls, exe):\n'
-        '        try:\n'
-        '            output = Executable(exe)("-V", output=str, error=str)\n'
-        '            match = re.search(r"munge-([0-9.]+)", output)\n'
-        '            return match.group(1) if match else None\n'
-        '        except Exception:\n'
-        '            return None\n'
+        '\\n    executables = [r"^munge\$"]\\n'
+        '\\n    @classmethod\\n'
+        '    def determine_version(cls, exe):\\n'
+        '        try:\\n'
+        '            output = Executable(exe)("-V", output=str, error=str)\\n'
+        '            match = re.search(r"munge-([0-9.]+)", output)\\n'
+        '            return match.group(1) if match else None\\n'
+        '        except Exception:\\n'
+        '            return None\\n'
     )
-    src, n = re.subn(r'(\n    variant\(\n        "localstatedir")', insert + r'\1', src, count=1)
+    src, n = re.subn(r'(\\n    variant\\(\\n        "localstatedir")', insert + r'\\1', src, count=1)
     if n != 1:
         raise SystemExit("FAIL: could not locate variant for injection")
     with open(p, 'w') as f:
