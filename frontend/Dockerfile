@@ -70,91 +70,9 @@ RUN git clone --recursive https://github.com/TACC/Lmod.git \
  && popd \
  && rm -rf Lmod
 
-# Clone spack-stack at the version specified by SPACK_STACK_VERSION. The git tag must
-# match exactly -- bumping the value should be paired with bumping the tag in any
-# downstream consumer paths (e.g., the patch script's "0.5.15 anchor" comment if the
-# new spack-stack ships a different newest munge version).
+# Clone spack-stack at the version specified by SPACK_STACK_VERSION.
 RUN cd /opt \
  && git clone -b ${SPACK_STACK_VERSION} --recurse-submodules https://github.com/jcsda/spack-stack.git
-
-# Stage a patch script that will be applied to the env-local munge recipe snapshot below.
-# spack-stack 2.1.0's bundled spack submodule predates two upstream changes we'd need:
-#   1. No `executables` / `determine_version` -- so `spack external find` cannot detect
-#      /usr/bin/munge automatically. The patch injects both.
-#   2. Newest known version capped at 0.5.15. The recipe deliberately skips 0.5.16 and
-#      0.5.17 because both contain a known high-severity CVE; the fix landed in 0.5.18
-#      which a newer spack recipe knows about but our pinned submodule does not. Our
-#      base images install patched munge >= 0.5.18 on the OS, so the auto-detected
-#      external version isn't recipe-known and the concretizer would reject it. The
-#      patch injects `version("<MUNGE_VERSION>", sha256=<fake>)` ONLY IF the system
-#      version isn't already recipe-known. The fake sha is safe because
-#      `packages:munge:buildable:false` (set below) prevents spack from ever
-#      downloading or building this version.
-# The script is idempotent on both injections and takes the system MUNGE_VERSION as
-# argv[2], so it correctly no-ops the version injection on any future base whose munge
-# happens to already be recipe-known.
-#
-# REMOVE WHEN: spack-stack bumps to a release whose bundled spack ships both
-# (a) munge >= 0.5.18 in the recipe AND (b) executables/determine_version detection.
-# At that point delete this RUN, the recipe-patching steps in the env-setup RUN below
-# (the spack python lookup, the python3 invocation, the __pycache__ purge, the
-# verification grep), and the `packages:munge:require:["@${MUNGE_VERSION}"]` config_add
-# -- the plain `spack external find munge` + `config add buildable:false` pair will
-# suffice. The MUNGE_VERSION detection from /usr/bin/munge -V will no longer be needed
-# (only the require constraint uses it; auto-detect handles version on its own).
-#
-# (Recipe lives in a Python distribution that spack pulls in, not in the spack git source,
-# so the patch is applied to the env's frozen copy at .spack-env/repos/... after env create.)
-RUN cat > /tmp/patch_munge_recipe.py <<'PY'
-"""Patch spack's munge recipe in place to enable system-munge external detection.
-
-Usage: patch_munge_recipe.py <path-to-munge-package.py> <system-munge-version>
-"""
-import re, sys
-p = sys.argv[1]
-munge_version = sys.argv[2]
-src = open(p).read()
-
-# (1) Inject executables + determine_version (idempotent: skip if both already present).
-if 'executables' not in src or 'determine_version' not in src:
-    insert_detection = (
-        '\n    executables = [r"^munge$"]\n'
-        '\n    @classmethod\n'
-        '    def determine_version(cls, exe):\n'
-        '        import subprocess, re as _re\n'
-        '        try:\n'
-        '            out = subprocess.check_output([exe, "-V"], text=True, stderr=subprocess.STDOUT)\n'
-        '            m = _re.search(r"munge-([0-9.]+)", out)\n'
-        '            return m.group(1) if m else None\n'
-        '        except Exception:\n'
-        '            return None\n'
-    )
-    src, n = re.subn(r'(\n    variant\(\n        "localstatedir")', insert_detection + r'\1', src, count=1)
-    if n != 1:
-        raise SystemExit("FAIL: could not locate localstatedir variant for detection-logic injection")
-    print("Injected executables + determine_version into recipe")
-else:
-    print("Recipe already has executables + determine_version; no detection injection needed")
-
-# (2) Inject version(<MUNGE_VERSION>) with placeholder sha if the system version isn't already declared.
-if 'version("' + munge_version + '"' in src:
-    print("Recipe already declares version " + munge_version + "; no version injection needed")
-else:
-    new_version = '    version("' + munge_version + '", sha256="' + '0' * 64 + '")\n'
-    # Anchor before the highest known version in the recipe (currently 0.5.15 in spack-stack 2.1.0).
-    src, n = re.subn(
-        r'(    version\("0\.5\.15", sha256="[a-f0-9]+"\)\n)',
-        new_version + r'\1',
-        src,
-        count=1,
-    )
-    if n != 1:
-        raise SystemExit("FAIL: could not locate version 0.5.15 anchor for version injection")
-    print("Injected version(" + repr(munge_version) + ") into recipe")
-
-open(p, 'w').write(src)
-print("Patched munge recipe at " + p)
-PY
 
 # Create and configure the unified env using the container site
 RUN cd /opt/spack-stack \
@@ -162,35 +80,50 @@ RUN cd /opt/spack-stack \
  && spack stack create env --site container --template unified-dev --name unified-env --compiler gcc \
  && cd envs/unified-env \
  && spack env activate . \
- # Detect the system munge version once, up-front, so the recipe patch and the \
- # `packages:munge:require:[@VERSION]` config_add below can both reference it. \
- && MUNGE_VERSION=$(/usr/bin/munge -V 2>&1 | head -1 | sed -n 's/^munge-\([0-9.]\+\).*/\1/p') \
- && [ -n "$MUNGE_VERSION" ] || { \
-        echo "ERROR: could not parse munge version from /usr/bin/munge -V output:"; \
-        /usr/bin/munge -V 2>&1; \
-        exit 1; \
-    } \
- && echo "Detected system munge version: $MUNGE_VERSION" \
- # Apply the munge recipe patch to the *source* recipe, before any external find / concretize \
- # runs (which is what triggers spack to lazily snapshot the recipe into .spack-env/repos/...). \
- # Ask spack itself for the recipe path -- robust to whether packages live in the spack git \
- # submodule, a pip-installed spack_repo distribution, or somewhere else entirely. \
+ # Replace the bundled munge recipe with upstream version (has 0.5.18 + CVE patches). \
+ # Must happen AFTER env create because environments snapshot recipes into their own repos. \
  && MUNGE_PY=$(spack python -c "import spack.repo; print(spack.repo.PATH.get_pkg_class('munge').module.__file__)") \
  && [ -n "$MUNGE_PY" ] && [ -f "$MUNGE_PY" ] || { \
-        echo "ERROR: spack could not locate munge/package.py (got: '$MUNGE_PY')"; \
-        echo "Diagnostic find under /opt:"; \
-        find /opt -path "*/packages/munge/package.py" 2>/dev/null; \
+        echo "ERROR: spack could not locate munge/package.py"; \
         exit 1; \
     } \
- && python3 /tmp/patch_munge_recipe.py "$MUNGE_PY" "$MUNGE_VERSION" \
- # Nuke any bytecode cache near the patched recipe so the next spack import re-compiles \
- # against the new source. Necessary because earlier spack commands in this RUN may have \
- # already imported and cached the unpatched recipe, and Python's mtime-based pyc validation \
- # can be unreliable on Docker overlayfs. \
+ && echo "Found munge recipe at: $MUNGE_PY" \
+ && curl -fsSL "https://raw.githubusercontent.com/spack/spack-packages/develop/repos/spack_repo/builtin/packages/munge/package.py" \
+     -o "$MUNGE_PY" \
+ && echo "Replaced with upstream recipe" \
+ # Clear bytecode cache so spack re-imports the modified recipe. \
  && rm -rf "$(dirname "$MUNGE_PY")/__pycache__" \
- && echo "Munge recipe patch verification (looking for version $MUNGE_VERSION + detection logic):" \
- && grep -nE "version\(\"${MUNGE_VERSION//./\\.}\"|executables = |def determine_version" "$MUNGE_PY" \
- # Fix system external versions for Ubuntu 26.04 \
+ # Patch in executables + determine_version using Spack idioms. \
+ && python3 <<PATCH
+import re
+p = "${MUNGE_PY}"
+with open(p) as f:
+    src = f.read()
+
+if 'executables' in src and 'determine_version' in src:
+    print("Recipe already has executables + determine_version")
+else:
+    insert = (
+        '\\n    executables = [r"^munge\$"]\\n'
+        '\\n    @classmethod\\n'
+        '    def determine_version(cls, exe):\\n'
+        '        import re\\n'
+        '        output = Executable(exe)("-V", output=str).rstrip()\\n'
+        '        match = re.search(r"munge-([0-9.]+)", output)\\n'
+        '        return match.group(1) if match else None\\n'
+    )
+    src, n = re.subn(r'(\\n    variant\\(\\n        "localstatedir")', insert + r'\\1', src, count=1)
+    if n != 1:
+        raise SystemExit("FAIL: could not locate variant for injection")
+    with open(p, 'w') as f:
+        f.write(src)
+    print("Injected executables + determine_version")
+PATCH
+
+RUN cd /opt/spack-stack \
+ && source setup.sh \
+ && cd envs/unified-env \
+ && spack env activate . \
  && spack external find --scope "env:/opt/spack-stack/envs/unified-env:/opt/spack-stack/envs/unified-env/site" \
     --exclude cmake \
     --exclude curl \
@@ -202,24 +135,24 @@ RUN cd /opt/spack-stack \
  # sometimes fails to pick up newly-patched recipes; an explicit single-package find reliably \
  # uses the patched recipe. Writes to the env scope (spack.yaml), where our `buildable: false` \
  # config_add further below also lands -- both get merged at concretize time. \
+ && echo "===== Verifying munge recipe has detection support =====" \
+ && spack python -c "import spack.repo; pkg = spack.repo.PATH.get_pkg_class('munge'); print('executables:', hasattr(pkg, 'executables')); print('determine_version:', hasattr(pkg, 'determine_version'))" \
+ && echo "===== Attempting to detect system munge =====" \
+ && /usr/bin/munge -V || echo "WARNING: munge command not found or failed" \
+ && echo "===== Testing munge detection directly =====" \
+ && spack python -c "import spack.repo; pkg_cls = spack.repo.PATH.get_pkg_class('munge'); print('Executables:', getattr(pkg_cls, 'executables', None)); import os; print('Munge at /usr/bin/munge:', os.path.exists('/usr/bin/munge')); print('Version detection:', pkg_cls.determine_version('/usr/bin/munge') if os.path.exists('/usr/bin/munge') else 'N/A')" \
  && spack external find munge \
+ && echo "===== Checking spack.yaml for munge external =====" \
+ && grep -A 5 "munge:" spack.yaml || echo "No munge entry found in spack.yaml" \
  # Add slurm as an external package \
  && echo "  slurm:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    externals:" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    - spec: slurm@25.11.5" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "      prefix: /usr" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
  && echo "    buildable: false" >> /opt/spack-stack/envs/unified-env/site/packages.yaml \
- # Forbid building munge so the concretizer must use the system munge that the bulk \
- # `spack external find` above auto-detected via the patched recipe. (Auto-detection writes \
- # the external entry to packages.yaml but does not set buildable:false on its own.) \
+ # Forbid building munge so the concretizer must use the auto-detected system munge. \
+ # Auto-detection writes the external entry to packages.yaml but does not set buildable:false. \
  && spack -e . config add 'packages:munge:buildable:false' \
- # Force the concretizer to pin munge at the system version. Without this require, the \
- # solver's version-badness scoring downranks our patched version (placeholder sha = "less \
- # buildable") in favor of a recipe-default version with a real sha, and picks build over \
- # external -- even though buildable:false is set and our auto-detected external is the only \
- # valid candidate at the system version. The require overrides the version score and forces \
- # the only feasible solution. MUNGE_VERSION is the value detected above. \
- && spack -e . config add "packages:munge:require:[\"@${MUNGE_VERSION}\"]" \
  # Configure openmpi to use Slurm scheduler integration (OpenMPI 5 uses PMIx, not +pmi). \
  # `~internal-pmix` forces openmpi to use the external spack pmix package instead of its \
  # bundled copy. The bundled copy's munge linkage happens at openmpi's autotools configure \
