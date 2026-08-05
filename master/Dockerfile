@@ -22,9 +22,10 @@ RUN <<EOF
         curl \
         emacs \
         file \
-        g++ \
-        gcc \
-        gfortran \
+        gcc-13 \
+        g++-13 \
+        gfortran-13 \
+        cpp-13 \
         git \
         git-lfs \
         gnupg2 \
@@ -43,6 +44,10 @@ RUN <<EOF
         unzip \
         zstd
   rm -rf /var/lib/apt/lists/*
+
+  update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+    --slave /usr/bin/g++ g++ /usr/bin/g++-13 \
+    --slave /usr/bin/gfortran gfortran /usr/bin/gfortran-13
 
   # Install Lmod
   git clone --recursive https://github.com/TACC/Lmod.git
