@@ -31,6 +31,17 @@ env:
 
 jobs:
 
+  generate_compose_tests:
+    name: generate-compose.py unit tests
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout repository
+        uses: actions/checkout@v4
+      -
+        name: Run unit tests
+        run: python3 -m unittest test_generate_compose.py -v
+
   build-test-push-amd64:
     name: amd64 (ubuntu-${{ matrix.ubuntu }})
     runs-on: ubuntu2204-8c-32g-300ssd
