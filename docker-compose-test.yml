@@ -30,7 +30,7 @@ services:
       secrets:
         - github_token
     image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-frontend:ubuntu-${UBUNTU_VERSION:-26.04}-spack-stack-${SPACK_STACK_VERSION:-2.1.0}
-    container_name: spack-stack-frontend
+    container_name: ${CLUSTER_NAME:-spack-stack}-frontend
     shm_size: '4g'
     hostname: slurmfrontend
     user: admin
@@ -38,8 +38,6 @@ services:
       - home-vol:/home/admin
       - opt-vol:/opt
       - ./test:/home/admin/test
-    ports:
-      - 8888:8888
     healthcheck:
       # /tmp/ssh-ready is created by the base image entrypoint after munged + sshd are up
       # and the admin SSH keypair is written. The long start_period absorbs the multi-GB
@@ -57,7 +55,7 @@ services:
       args:
         BASE_IMAGE_TAG: ubuntu-${UBUNTU_VERSION:-26.04}-slurm-${SLURM_VERSION:-25.11.5}
     image: ghcr.io/noaa-gsl/dockerspackstackslurmcluster/slurm-spack-stack-master:ubuntu-${UBUNTU_VERSION:-26.04}-spack-stack-${SPACK_STACK_VERSION:-2.1.0}
-    container_name: spack-stack-master
+    container_name: ${CLUSTER_NAME:-spack-stack}-master
     shm_size: '4g'
     hostname: slurmmaster
     user: admin
@@ -67,10 +65,6 @@ services:
       - ./test:/home/admin/test
     environment:
       - SLURM_CPUS_ON_NODE=8
-    ports:
-      - 6817:6817
-      - 6818:6818
-      - 6819:6819
     depends_on:
       slurmfrontend:
         condition: service_healthy
@@ -81,7 +75,7 @@ services:
       context: ./node
       args:
         BASE_IMAGE_TAG: ubuntu-${UBUNTU_VERSION:-26.04}-slurm-${SLURM_VERSION:-25.11.5}
-    container_name: spack-stack-node1
+    container_name: ${CLUSTER_NAME:-spack-stack}-node1
     hostname: slurmnode1
     environment:
       - SLURM_NODENAME=slurmnode1
@@ -89,7 +83,7 @@ services:
 
   slurmnode2:
     <<: *node-common
-    container_name: spack-stack-node2
+    container_name: ${CLUSTER_NAME:-spack-stack}-node2
     hostname: slurmnode2
     environment:
       - SLURM_NODENAME=slurmnode2
@@ -97,7 +91,7 @@ services:
 
   slurmnode3:
     <<: *node-common
-    container_name: spack-stack-node3
+    container_name: ${CLUSTER_NAME:-spack-stack}-node3
     hostname: slurmnode3
     environment:
       - SLURM_NODENAME=slurmnode3
@@ -105,7 +99,7 @@ services:
 
   slurmnode4:
     <<: *node-common
-    container_name: spack-stack-node4
+    container_name: ${CLUSTER_NAME:-spack-stack}-node4
     hostname: slurmnode4
     environment:
       - SLURM_NODENAME=slurmnode4
@@ -113,7 +107,7 @@ services:
 
   slurmnode5:
     <<: *node-common
-    container_name: spack-stack-node5
+    container_name: ${CLUSTER_NAME:-spack-stack}-node5
     hostname: slurmnode5
     environment:
       - SLURM_NODENAME=slurmnode5
